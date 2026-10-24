@@ -9,7 +9,7 @@ export const basePreferences: ShoppingPreferences = {
   category: "laptop",
   maxTotalCents: 30000,
   requirements: [
-    { id: "req_charger", attribute: "chargerIncluded", operator: "equals", value: true, priority: "required" },
+    { id: "req_charger", attribute: "charger_included", operator: "equals", value: true, priority: "required" },
     { id: "req_delivery", attribute: "delivery_by_date", operator: "at_most", value: "2026-11-01", priority: "required" },
   ],
 };
