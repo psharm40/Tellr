@@ -75,19 +75,75 @@ describe("money", () => {
 });
 
 describe("spoken summary", () => {
+  test("reads every term of a passing checkout in a fixed order", () => {
+    const summary = evaluateCheckout(basePreferences, baseCheckout, SELECTED_LISTING_ID).spokenSummary;
+    assert.equal(
+      summary,
+      "Checkout review passed. Quantity: 1. Item subtotal: $250.00. Add-ons: none. Shipping: $15.00. Tax: $20.63. " +
+        "Total: $285.63. Subscription: none. Estimated delivery: 2026-10-29. " +
+        "Everything matches your requirements. Say confirm to place the demo order.",
+    );
+  });
+
+  test("names each add-on with its price and acceptance, and explains an unknown total", () => {
+    const checkout = {
+      ...baseCheckout,
+      version: 2,
+      quantity: 2,
+      taxCents: null,
+      hasSubscription: null,
+      estimatedDeliveryDate: null,
+      addOns: [
+        { id: "addon_case", label: "laptop sleeve", priceCents: 1200, explicitlyAccepted: true },
+        { id: "addon_protection", label: "protection plan", priceCents: 900, explicitlyAccepted: false },
+      ],
+    };
+    const summary = evaluateCheckout({ ...basePreferences, maxTotalCents: 60000 }, checkout, SELECTED_LISTING_ID)
+      .spokenSummary;
+    assert.ok(
+      summary.startsWith(
+        "Checkout is blocked. Quantity: 2. Item subtotal: $500.00 ($250.00 each). " +
+          "Add-on: laptop sleeve, $12.00, accepted by you. Add-on: protection plan, $9.00, not accepted by you. " +
+          "Shipping: $15.00. Tax: not shown. Total: unknown, because tax is not shown. " +
+          "Subscription: unknown. Estimated delivery: not shown. Problems: ",
+      ),
+      summary,
+    );
+    // problems come before unknowns, each listed as now
+    const problems = summary.indexOf("Problems: ");
+    const unknowns = summary.indexOf("Still unknown: ");
+    assert.ok(problems > 0 && unknowns > problems);
+    assert.match(summary, /Problems: Extras you did not accept were added: protection plan \(\$9\.00\)\./);
+    assert.match(summary, /Still unknown: The final total is unknown because tax is not shown yet/);
+  });
+
+  test("explains when both shipping and tax are missing", () => {
+    const checkout = { ...baseCheckout, version: 2, shippingCents: null, taxCents: null };
+    const summary = evaluateCheckout(basePreferences, checkout, SELECTED_LISTING_ID).spokenSummary;
+    assert.match(summary, /Shipping: not shown\. Tax: not shown\. Total: unknown, because shipping and tax are not shown\./);
+  });
+
+  test("states an included subscription", () => {
+    const checkout = { ...baseCheckout, version: 2, hasSubscription: true };
+    const summary = evaluateCheckout(basePreferences, checkout, SELECTED_LISTING_ID).spokenSummary;
+    assert.match(summary, /^Checkout is blocked\./);
+    assert.match(summary, /Subscription: included\./);
+    assert.match(summary, /Problems: This checkout includes a subscription\./);
+  });
+
   test("always discloses the quantity", () => {
     const prefs = { ...basePreferences, maxTotalCents: 60000 };
     const summary = evaluateCheckout(prefs, { ...baseCheckout, quantity: 2 }, SELECTED_LISTING_ID).spokenSummary;
     assert.match(summary, /Quantity: 2\./);
   });
 
-  test("is deterministic and mentions the problem", () => {
-    const checkout = { ...baseCheckout, version: 2, hasSubscription: true };
-    const a = evaluateCheckout(basePreferences, checkout, SELECTED_LISTING_ID).spokenSummary;
-    const b = evaluateCheckout(basePreferences, checkout, SELECTED_LISTING_ID).spokenSummary;
-    assert.equal(a, b);
-    assert.match(a, /^Checkout is blocked\./);
-    assert.match(a, /subscription/);
+  test("is deterministic", () => {
+    for (const f of checkoutFixtures) {
+      const a = evaluateCheckout(f.preferences, f.checkout, f.selectedListingId).spokenSummary;
+      const b = evaluateCheckout(structuredClone(f.preferences), structuredClone(f.checkout), f.selectedListingId)
+        .spokenSummary;
+      assert.equal(a, b, f.name);
+    }
   });
 });
 

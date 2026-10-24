@@ -215,11 +215,24 @@ function spokenSummaryFrom(
 ): string {
   const head =
     overall === "pass" ? "Checkout review passed." : overall === "blocked" ? "Checkout is blocked." : "Checkout needs review.";
+  const each = checkout.quantity > 1 ? ` (${formatCents(checkout.unitPriceCents)} each)` : "";
+  // the order below is fixed so the same checkout always reads the same way
   const parts = [
     head,
-    totalCents === null ? "The final total is unknown." : `The final total is ${formatCents(totalCents)}.`,
-    // quantity is always disclosed, even when no quantity was requested
     `Quantity: ${checkout.quantity}.`,
+    `Item subtotal: ${formatCents(itemCents(checkout))}${each}.`,
+    ...(checkout.addOns.length === 0
+      ? ["Add-ons: none."]
+      : checkout.addOns.map(
+          (a) => `Add-on: ${a.label}, ${formatCents(a.priceCents)}, ${a.explicitlyAccepted ? "accepted by you" : "not accepted by you"}.`,
+        )),
+    `Shipping: ${checkout.shippingCents === null ? "not shown" : formatCents(checkout.shippingCents)}.`,
+    `Tax: ${checkout.taxCents === null ? "not shown" : formatCents(checkout.taxCents)}.`,
+    totalCents === null
+      ? `Total: unknown, because ${missingCosts(checkout)} not shown.`
+      : `Total: ${formatCents(totalCents)}.`,
+    `Subscription: ${checkout.hasSubscription === null ? "unknown" : checkout.hasSubscription ? "included" : "none"}.`,
+    `Estimated delivery: ${checkout.estimatedDeliveryDate ?? "not shown"}.`,
   ];
   const failed = checks.filter((c) => c.status === "fail").map((c) => sentence(c.explanation));
   const unknown = checks.filter((c) => c.status === "unknown").map((c) => sentence(c.explanation));
