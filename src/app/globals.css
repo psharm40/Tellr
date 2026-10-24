@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f4f4f5;
+  --foreground: #09090b;
 }
 
 @theme inline {
@@ -14,13 +14,115 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #000000;
+    --foreground: #fafafa;
   }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  font-size: 1.125rem;
+  line-height: 1.6;
+}
+
+/* shared look for tellr ui: high contrast, big targets, status never shown by color alone */
+@layer components {
+  .tellr-card {
+    @apply rounded-xl border-2 border-zinc-900 bg-white p-5 text-zinc-950 sm:p-6 dark:border-zinc-200 dark:bg-zinc-950 dark:text-zinc-50;
+  }
+  .tellr-subcard {
+    @apply rounded-lg border-2 border-zinc-300 bg-zinc-50 p-4 dark:border-zinc-700 dark:bg-zinc-900;
+  }
+  .tellr-btn {
+    @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border-2 border-zinc-900 bg-white px-4 py-2 font-semibold text-zinc-950 hover:bg-zinc-100 focus-visible:outline-4 focus-visible:outline-offset-2 focus-visible:outline-blue-700 disabled:cursor-not-allowed disabled:border-zinc-400 disabled:text-zinc-500 dark:border-zinc-100 dark:bg-zinc-900 dark:text-zinc-50 dark:hover:bg-zinc-800 dark:disabled:border-zinc-600 dark:disabled:text-zinc-500;
+  }
+  .tellr-btn-small {
+    @apply min-h-9 px-3 py-1 text-base;
+  }
+  .tellr-btn-disabled {
+    @apply cursor-not-allowed border-zinc-400 text-zinc-500 dark:border-zinc-600 dark:text-zinc-500;
+  }
+  .tellr-file-trigger {
+    @apply peer-focus-visible:outline-4 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-blue-700;
+  }
+  .tellr-btn-primary {
+    @apply inline-flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-lg border-2 border-blue-800 bg-blue-800 px-5 py-2 text-lg font-semibold text-white hover:bg-blue-900 focus-visible:outline-4 focus-visible:outline-offset-2 focus-visible:outline-blue-700 disabled:cursor-not-allowed disabled:border-zinc-400 disabled:bg-zinc-300 disabled:text-zinc-700;
+  }
+  .tellr-input {
+    @apply block w-full rounded-lg border-2 border-zinc-700 bg-white px-3 py-2 text-zinc-950 focus-visible:outline-4 focus-visible:outline-offset-2 focus-visible:outline-blue-700 disabled:bg-zinc-100 disabled:text-zinc-500 dark:border-zinc-300 dark:bg-zinc-900 dark:text-zinc-50 dark:disabled:bg-zinc-800;
+  }
+  .tellr-label {
+    @apply font-semibold;
+  }
+  .tellr-hint {
+    @apply text-base text-zinc-700 dark:text-zinc-300;
+  }
+  .tellr-error-text {
+    @apply text-base font-semibold text-red-800 dark:text-red-300;
+  }
+  .tellr-row {
+    @apply flex flex-wrap items-center justify-between gap-2 rounded-lg border-2 border-zinc-300 px-3 py-2 dark:border-zinc-700;
+  }
+  .tellr-facts {
+    @apply flex flex-wrap gap-x-8 gap-y-2;
+  }
+  .tellr-facts dt {
+    @apply text-base text-zinc-700 dark:text-zinc-300;
+  }
+  .tellr-facts dd {
+    @apply font-semibold;
+  }
+  .tellr-choice {
+    @apply flex cursor-pointer items-start gap-3 rounded-lg border-2 border-zinc-300 p-3 has-[:checked]:border-blue-800 has-[:checked]:bg-blue-50 has-[:focus-visible]:outline-4 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-blue-700 dark:border-zinc-700 dark:has-[:checked]:border-blue-400 dark:has-[:checked]:bg-blue-950;
+  }
+  .tellr-photo {
+    @apply rounded-lg border-2 border-zinc-300 p-2 dark:border-zinc-700;
+  }
+  .tellr-step-number {
+    @apply mr-3 inline-flex size-9 items-center justify-center rounded-full bg-zinc-900 align-middle text-lg text-white dark:bg-zinc-100 dark:text-zinc-950;
+  }
+  .tellr-step-link {
+    @apply block rounded-lg border-2 border-zinc-300 px-3 py-2 hover:border-zinc-900 focus-visible:outline-4 focus-visible:outline-offset-2 focus-visible:outline-blue-700 dark:border-zinc-700 dark:hover:border-zinc-100;
+  }
+  .tellr-summary {
+    @apply cursor-pointer font-semibold focus-visible:outline-4 focus-visible:outline-offset-2 focus-visible:outline-blue-700;
+  }
+  .tellr-callout {
+    @apply rounded-lg border-2 border-l-8 p-4;
+  }
+  .tellr-pill {
+    @apply inline-flex items-center gap-1.5 rounded-full border-2 px-3 py-0.5 text-base font-semibold;
+  }
+  .tellr-badge-fixture {
+    @apply inline-block rounded-md border-2 border-dashed border-fuchsia-800 bg-fuchsia-50 px-3 py-1 text-base font-bold text-fuchsia-900 dark:border-fuchsia-300 dark:bg-fuchsia-950 dark:text-fuchsia-100;
+  }
+  .tellr-tone-good {
+    @apply border-green-800 bg-green-50 text-green-950 dark:border-green-400 dark:bg-green-950 dark:text-green-50;
+  }
+  .tellr-tone-warn {
+    @apply border-amber-700 bg-amber-50 text-amber-950 dark:border-amber-400 dark:bg-amber-950 dark:text-amber-50;
+  }
+  .tellr-tone-bad {
+    @apply border-red-800 bg-red-50 text-red-950 dark:border-red-400 dark:bg-red-950 dark:text-red-50;
+  }
+  .tellr-tone-info {
+    @apply border-blue-800 bg-blue-50 text-blue-950 dark:border-blue-400 dark:bg-blue-950 dark:text-blue-50;
+  }
+  .tellr-tone-muted {
+    @apply border-zinc-400 bg-zinc-100 text-zinc-800 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-200;
+  }
+  .tellr-edge-good {
+    @apply border-l-8 border-l-green-800 dark:border-l-green-400;
+  }
+  .tellr-edge-warn {
+    @apply border-l-8 border-l-amber-700 dark:border-l-amber-400;
+  }
+  .tellr-edge-bad {
+    @apply border-l-8 border-l-red-800 dark:border-l-red-400;
+  }
+  .tellr-spinner {
+    @apply inline-block size-5 animate-spin rounded-full border-[3px] border-current border-t-transparent motion-reduce:animate-none;
+  }
 }
