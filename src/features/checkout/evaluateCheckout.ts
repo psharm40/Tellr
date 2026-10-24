@@ -232,6 +232,11 @@ function sentence(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+// "1 thing is unknown" or "2 things are unknown"
+function unknownPhrase(count: number): string {
+  return `${count} ${count === 1 ? "thing is" : "things are"} unknown`;
+}
+
 function spokenSummaryFrom(
   overall: CheckoutReview["overall"],
   totalCents: number | null,
@@ -245,8 +250,10 @@ function spokenSummaryFrom(
     overall === "pass"
       ? "Checkout review passed."
       : overall === "blocked"
-        ? `Checkout is blocked: ${failCount} ${failCount === 1 ? "problem" : "problems"}.`
-        : `Checkout needs review: ${unknownCount} ${unknownCount === 1 ? "thing is" : "things are"} unknown.`;
+        ? `Checkout is blocked: ${failCount} ${failCount === 1 ? "problem" : "problems"}${
+            unknownCount > 0 ? `, and ${unknownPhrase(unknownCount)}` : ""
+          }.`
+        : `Checkout needs review: ${unknownPhrase(unknownCount)}.`;
   const each = checkout.quantity > 1 ? ` (${formatCents(checkout.unitPriceCents)} each)` : "";
   // the order below is fixed so the same checkout always reads the same way
   const parts = [

@@ -125,7 +125,7 @@ describe("spoken summary", () => {
       .spokenSummary;
     assert.ok(
       summary.startsWith(
-        "Checkout is blocked: 1 problem. Quantity: 2. Item subtotal: $500.00 ($250.00 each). " +
+        "Checkout is blocked: 1 problem, and 4 things are unknown. Quantity: 2. Item subtotal: $500.00 ($250.00 each). " +
           "Add-on: laptop sleeve, $12.00, accepted by you. Add-on: protection plan, $9.00, not accepted by you. " +
           "Shipping: $15.00. Tax: not shown. Total: unknown, because tax is not shown. " +
           "Subscription: unknown. Estimated delivery: not shown. Problems: ",
@@ -157,8 +157,29 @@ describe("spoken summary", () => {
   test("counts problems when blocked", () => {
     const checkout = { ...baseCheckout, version: 2, hasSubscription: true, shippingCents: 4500 };
     const summary = evaluateCheckout(basePreferences, checkout, OTHER_LISTING_ID).spokenSummary;
-    // total_budget, item_match and subscription fail
-    assert.match(summary, /^Checkout is blocked: 3 problems\. /);
+    // total_budget, item_match and subscription fail; nothing is unknown, so no unknowns part
+    assert.match(summary, /^Checkout is blocked: 3 problems\. Quantity:/);
+  });
+
+  test("blocked with one problem and one unknown uses singular for both", () => {
+    const checkout = { ...baseCheckout, version: 2, hasSubscription: true, estimatedDeliveryDate: null };
+    const summary = evaluateCheckout(basePreferences, checkout, SELECTED_LISTING_ID).spokenSummary;
+    // subscription fails; delivery is unknown
+    assert.match(summary, /^Checkout is blocked: 1 problem, and 1 thing is unknown\. Quantity:/);
+  });
+
+  test("blocked with several problems and unknowns uses plural for both", () => {
+    const checkout = { ...baseCheckout, version: 2, hasSubscription: true, taxCents: null };
+    const summary = evaluateCheckout(basePreferences, checkout, OTHER_LISTING_ID).spokenSummary;
+    // item_match and subscription fail; total_budget and price_breakdown are unknown
+    assert.match(summary, /^Checkout is blocked: 2 problems, and 2 things are unknown\. Quantity:/);
+  });
+
+  test("blocked with no unknowns leaves out the unknowns part", () => {
+    const checkout = { ...baseCheckout, version: 2, hasSubscription: true };
+    const summary = evaluateCheckout(basePreferences, checkout, SELECTED_LISTING_ID).spokenSummary;
+    assert.match(summary, /^Checkout is blocked: 1 problem\. Quantity:/);
+    assert.doesNotMatch(summary.split(" Quantity:")[0], /unknown/);
   });
 
   test("counts unknowns when needing review", () => {
