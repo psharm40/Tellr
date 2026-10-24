@@ -39,6 +39,31 @@ export function isIsoDate(value: unknown): value is string {
   );
 }
 
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+// reads an iso date as weekday, month day, year (2026-10-29 -> thursday, october 29, 2026).
+// utc only, with fixed english names, so no timezone or locale can change it.
+export function spokenDate(isoDate: string): string {
+  if (!isIsoDate(isoDate)) return isoDate;
+  const [y, m, d] = isoDate.split("-").map(Number);
+  const weekday = WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+  return `${weekday}, ${MONTHS[m - 1]} ${d}, ${y}`;
+}
+
 export function itemCents(checkout: CheckoutSnapshot): number {
   return checkout.unitPriceCents * checkout.quantity;
 }
@@ -167,7 +192,7 @@ function checkDelivery(preferences: ShoppingPreferences, checkout: CheckoutSnaps
     return check(
       "delivery",
       "pass",
-      date === null ? "you did not set a delivery deadline." : `you did not set a delivery deadline; estimated delivery is ${date}.`,
+      date === null ? "you did not set a delivery deadline." : `you did not set a delivery deadline; estimated delivery is ${spokenDate(date)}.`,
     );
   }
   if (req.operator !== "at_most" || !isIsoDate(req.value)) {
@@ -175,12 +200,12 @@ function checkDelivery(preferences: ShoppingPreferences, checkout: CheckoutSnaps
   }
   const deadline = req.value;
   if (date === null) {
-    return check("delivery", "unknown", `the delivery date is not shown, so delivery by ${deadline} cannot be confirmed.`);
+    return check("delivery", "unknown", `the delivery date is not shown, so delivery by ${spokenDate(deadline)} cannot be confirmed.`);
   }
   // iso dates compare correctly as strings
   return date <= deadline
-    ? check("delivery", "pass", `estimated delivery on ${date} meets your ${deadline} deadline.`)
-    : check("delivery", "fail", `estimated delivery on ${date} is after your ${deadline} deadline.`);
+    ? check("delivery", "pass", `estimated delivery on ${spokenDate(date)} meets your ${spokenDate(deadline)} deadline.`)
+    : check("delivery", "fail", `estimated delivery on ${spokenDate(date)} is after your ${spokenDate(deadline)} deadline.`);
 }
 
 // every charge must be itemized and known; reads the breakdown back to the shopper
@@ -213,8 +238,15 @@ function spokenSummaryFrom(
   checkout: CheckoutSnapshot,
   checks: CheckoutCheck[],
 ): string {
+  const failCount = checks.filter((c) => c.status === "fail").length;
+  const unknownCount = checks.filter((c) => c.status === "unknown").length;
+  // the opening line counts what the shopper must deal with
   const head =
-    overall === "pass" ? "Checkout review passed." : overall === "blocked" ? "Checkout is blocked." : "Checkout needs review.";
+    overall === "pass"
+      ? "Checkout review passed."
+      : overall === "blocked"
+        ? `Checkout is blocked: ${failCount} ${failCount === 1 ? "problem" : "problems"}.`
+        : `Checkout needs review: ${unknownCount} ${unknownCount === 1 ? "thing is" : "things are"} unknown.`;
   const each = checkout.quantity > 1 ? ` (${formatCents(checkout.unitPriceCents)} each)` : "";
   // the order below is fixed so the same checkout always reads the same way
   const parts = [
@@ -232,7 +264,7 @@ function spokenSummaryFrom(
       ? `Total: unknown, because ${missingCosts(checkout)} not shown.`
       : `Total: ${formatCents(totalCents)}.`,
     `Subscription: ${checkout.hasSubscription === null ? "unknown" : checkout.hasSubscription ? "included" : "none"}.`,
-    `Estimated delivery: ${checkout.estimatedDeliveryDate ?? "not shown"}.`,
+    `Estimated delivery: ${checkout.estimatedDeliveryDate === null ? "not shown" : spokenDate(checkout.estimatedDeliveryDate)}.`,
   ];
   const failed = checks.filter((c) => c.status === "fail").map((c) => sentence(c.explanation));
   const unknown = checks.filter((c) => c.status === "unknown").map((c) => sentence(c.explanation));

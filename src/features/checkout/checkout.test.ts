@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { confirmDemoOrder } from "./confirmDemoOrder";
-import { CHECKOUT_RULE_IDS, computeTotalCents, evaluateCheckout } from "./evaluateCheckout";
+import { CHECKOUT_RULE_IDS, computeTotalCents, evaluateCheckout, spokenDate } from "./evaluateCheckout";
 import {
   OTHER_LISTING_ID,
   SELECTED_LISTING_ID,
@@ -57,6 +57,29 @@ describe("item_match", () => {
   });
 });
 
+describe("spokenDate", () => {
+  test("reads iso dates with weekday, month name, day and year", () => {
+    assert.equal(spokenDate("2026-10-29"), "Thursday, October 29, 2026");
+    assert.equal(spokenDate("2026-11-01"), "Sunday, November 1, 2026");
+    assert.equal(spokenDate("2028-02-29"), "Tuesday, February 29, 2028");
+    assert.equal(spokenDate("2027-01-01"), "Friday, January 1, 2027");
+    assert.equal(spokenDate("2026-12-31"), "Thursday, December 31, 2026");
+  });
+
+  test("uses utc, so midnight never shifts the day in any timezone", () => {
+    const original = process.env.TZ;
+    try {
+      for (const tz of ["Pacific/Kiritimati", "Pacific/Pago_Pago", "America/Los_Angeles", "Asia/Kolkata"]) {
+        process.env.TZ = tz;
+        assert.equal(spokenDate("2026-10-29"), "Thursday, October 29, 2026", tz);
+      }
+    } finally {
+      if (original === undefined) delete process.env.TZ;
+      else process.env.TZ = original;
+    }
+  });
+});
+
 describe("money", () => {
   test("total is exact integer cents", () => {
     assert.equal(computeTotalCents(baseCheckout), 28563);
@@ -80,7 +103,7 @@ describe("spoken summary", () => {
     assert.equal(
       summary,
       "Checkout review passed. Quantity: 1. Item subtotal: $250.00. Add-ons: none. Shipping: $15.00. Tax: $20.63. " +
-        "Total: $285.63. Subscription: none. Estimated delivery: 2026-10-29. " +
+        "Total: $285.63. Subscription: none. Estimated delivery: Thursday, October 29, 2026. " +
         "Everything matches your requirements. Say confirm to place the demo order.",
     );
   });
@@ -102,7 +125,7 @@ describe("spoken summary", () => {
       .spokenSummary;
     assert.ok(
       summary.startsWith(
-        "Checkout is blocked. Quantity: 2. Item subtotal: $500.00 ($250.00 each). " +
+        "Checkout is blocked: 1 problem. Quantity: 2. Item subtotal: $500.00 ($250.00 each). " +
           "Add-on: laptop sleeve, $12.00, accepted by you. Add-on: protection plan, $9.00, not accepted by you. " +
           "Shipping: $15.00. Tax: not shown. Total: unknown, because tax is not shown. " +
           "Subscription: unknown. Estimated delivery: not shown. Problems: ",
@@ -126,9 +149,47 @@ describe("spoken summary", () => {
   test("states an included subscription", () => {
     const checkout = { ...baseCheckout, version: 2, hasSubscription: true };
     const summary = evaluateCheckout(basePreferences, checkout, SELECTED_LISTING_ID).spokenSummary;
-    assert.match(summary, /^Checkout is blocked\./);
+    assert.match(summary, /^Checkout is blocked: 1 problem\./);
     assert.match(summary, /Subscription: included\./);
     assert.match(summary, /Problems: This checkout includes a subscription\./);
+  });
+
+  test("counts problems when blocked", () => {
+    const checkout = { ...baseCheckout, version: 2, hasSubscription: true, shippingCents: 4500 };
+    const summary = evaluateCheckout(basePreferences, checkout, OTHER_LISTING_ID).spokenSummary;
+    // total_budget, item_match and subscription fail
+    assert.match(summary, /^Checkout is blocked: 3 problems\. /);
+  });
+
+  test("counts unknowns when needing review", () => {
+    const one = evaluateCheckout(basePreferences, { ...baseCheckout, version: 2, hasSubscription: null }, SELECTED_LISTING_ID);
+    assert.match(one.spokenSummary, /^Checkout needs review: 1 thing is unknown\. /);
+    const several = evaluateCheckout(
+      basePreferences,
+      { ...baseCheckout, version: 2, taxCents: null, estimatedDeliveryDate: null },
+      SELECTED_LISTING_ID,
+    );
+    // total_budget, delivery and price_breakdown are unknown
+    assert.match(several.spokenSummary, /^Checkout needs review: 3 things are unknown\. /);
+  });
+
+  test("speaks delivery dates in every delivery explanation", () => {
+    const late = evaluateCheckout(basePreferences, { ...baseCheckout, version: 2, estimatedDeliveryDate: "2026-11-05" }, SELECTED_LISTING_ID);
+    assert.match(late.spokenSummary, /Estimated delivery: Thursday, November 5, 2026\./);
+    assert.match(
+      late.spokenSummary,
+      /Problems: Estimated delivery on Thursday, November 5, 2026 is after your Sunday, November 1, 2026 deadline\./,
+    );
+    const missing = evaluateCheckout(basePreferences, { ...baseCheckout, version: 2, estimatedDeliveryDate: null }, SELECTED_LISTING_ID);
+    assert.match(missing.spokenSummary, /delivery by Sunday, November 1, 2026 cannot be confirmed/);
+    const onTime = evaluateCheckout(basePreferences, baseCheckout, SELECTED_LISTING_ID).checks.find((c) => c.ruleId === "delivery");
+    assert.equal(onTime?.explanation, "estimated delivery on Thursday, October 29, 2026 meets your Sunday, November 1, 2026 deadline.");
+    const noDeadline = evaluateCheckout({ ...basePreferences, requirements: [] }, baseCheckout, SELECTED_LISTING_ID).checks.find(
+      (c) => c.ruleId === "delivery",
+    );
+    assert.equal(noDeadline?.explanation, "you did not set a delivery deadline; estimated delivery is Thursday, October 29, 2026.");
+    // no raw iso date is ever spoken
+    for (const review of [late, missing]) assert.doesNotMatch(review.spokenSummary, /\d{4}-\d{2}-\d{2}/);
   });
 
   test("always discloses the quantity", () => {
