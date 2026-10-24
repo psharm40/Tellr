@@ -3,12 +3,15 @@ import type { CheckoutReview } from "@/types/tellr";
 import { evaluateCheckout } from "./evaluateCheckout";
 import type { ConfirmRequest } from "./validate";
 
+// the route always supplies an id; direct callers without one are refused through item_match
+export type ConfirmInput = Omit<ConfirmRequest, "selectedListingId"> & { selectedListingId?: string };
+
 export type ConfirmResult =
   | { ok: true; demoOrderId: string; status: "demo_completed"; review: CheckoutReview }
   | { ok: false; httpStatus: 409; error: string; review: CheckoutReview };
 
 export function confirmDemoOrder(
-  request: ConfirmRequest,
+  request: ConfirmInput,
   makeOrderId: () => string = () => `demo_${crypto.randomUUID()}`,
 ): ConfirmResult {
   // always recompute on the server; a review sent by the client is never trusted

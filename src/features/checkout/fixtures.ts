@@ -10,7 +10,7 @@ export const basePreferences: ShoppingPreferences = {
   maxTotalCents: 30000,
   requirements: [
     { id: "req_charger", attribute: "chargerIncluded", operator: "equals", value: true, priority: "required" },
-    { id: "req_delivery", attribute: "deliveryDate", operator: "at_most", value: "2026-11-01", priority: "required" },
+    { id: "req_delivery", attribute: "delivery_by_date", operator: "at_most", value: "2026-11-01", priority: "required" },
   ],
 };
 
@@ -63,7 +63,8 @@ export const checkoutFixtures: CheckoutFixture[] = [
     expected: { overall: "blocked", totalCents: 28563, checks: { item_match: "fail" } },
   },
   {
-    name: "item missing: no selected listing id",
+    // the routes return 400 for this request (see the route fixtures below); the evaluator stays defensive
+    name: "item missing: no selected listing id (direct call only)",
     preferences: basePreferences,
     checkout: baseCheckout,
     expected: { overall: "needs_review", totalCents: 28563, checks: { item_match: "unknown" } },
@@ -73,21 +74,21 @@ export const checkoutFixtures: CheckoutFixture[] = [
     preferences: basePreferences,
     checkout: changed({ shippingCents: 4500 }),
     selectedListingId: SELECTED_LISTING_ID,
-    expected: { overall: "blocked", totalCents: 31563, checks: { budget: "fail" } },
+    expected: { overall: "blocked", totalCents: 31563, checks: { total_budget: "fail" } },
   },
   {
     name: "tax unknown: total and budget cannot be confirmed",
     preferences: basePreferences,
     checkout: changed({ taxCents: null }),
     selectedListingId: SELECTED_LISTING_ID,
-    expected: { overall: "needs_review", totalCents: null, checks: { total_known: "unknown", budget: "unknown" } },
+    expected: { overall: "needs_review", totalCents: null, checks: { total_budget: "unknown", price_breakdown: "unknown" } },
   },
   {
     name: "tax unknown but known charges already over budget",
     preferences: basePreferences,
     checkout: changed({ taxCents: null, unitPriceCents: 29000, shippingCents: 1500 }),
     selectedListingId: SELECTED_LISTING_ID,
-    expected: { overall: "blocked", totalCents: null, checks: { total_known: "unknown", budget: "fail" } },
+    expected: { overall: "blocked", totalCents: null, checks: { total_budget: "fail", price_breakdown: "unknown" } },
   },
   {
     name: "unrequested add-on: flagged even though total stays in budget",
@@ -96,7 +97,7 @@ export const checkoutFixtures: CheckoutFixture[] = [
       addOns: [{ id: "addon_protection", label: "protection plan", priceCents: 900, explicitlyAccepted: false }],
     }),
     selectedListingId: SELECTED_LISTING_ID,
-    expected: { overall: "blocked", totalCents: 29463, checks: { add_ons: "fail" } },
+    expected: { overall: "blocked", totalCents: 29463, checks: { unexpected_addons: "fail" } },
   },
   {
     name: "accepted add-on: counted in total and allowed",
@@ -105,7 +106,7 @@ export const checkoutFixtures: CheckoutFixture[] = [
       addOns: [{ id: "addon_case", label: "laptop sleeve", priceCents: 1200, explicitlyAccepted: true }],
     }),
     selectedListingId: SELECTED_LISTING_ID,
-    expected: { overall: "pass", totalCents: 29763, checks: { add_ons: "pass" } },
+    expected: { overall: "pass", totalCents: 29763, checks: { unexpected_addons: "pass" } },
   },
   {
     name: "subscription present: blocked",
@@ -126,27 +127,78 @@ export const checkoutFixtures: CheckoutFixture[] = [
     preferences: basePreferences,
     checkout: changed({ estimatedDeliveryDate: null }),
     selectedListingId: SELECTED_LISTING_ID,
-    expected: { overall: "needs_review", totalCents: 28563, checks: { delivery_date: "unknown" } },
+    expected: { overall: "needs_review", totalCents: 28563, checks: { delivery: "unknown" } },
   },
   {
     name: "delivery after deadline: blocked",
     preferences: basePreferences,
     checkout: changed({ estimatedDeliveryDate: "2026-11-05" }),
     selectedListingId: SELECTED_LISTING_ID,
-    expected: { overall: "blocked", totalCents: 28563, checks: { delivery_date: "fail" } },
+    expected: { overall: "blocked", totalCents: 28563, checks: { delivery: "fail" } },
   },
   {
     name: "delivery date missing without a deadline: not required",
     preferences: { ...basePreferences, requirements: [basePreferences.requirements[0]] },
     checkout: changed({ estimatedDeliveryDate: null }),
     selectedListingId: SELECTED_LISTING_ID,
-    expected: { overall: "pass", totalCents: 28563, checks: { delivery_date: "pass" } },
+    expected: { overall: "pass", totalCents: 28563, checks: { delivery: "pass" } },
   },
   {
-    name: "quantity above 1 without a quantity requirement: blocked",
-    preferences: basePreferences,
+    name: "quantity 2 without a quantity requirement: passes and is disclosed",
+    preferences: { ...basePreferences, maxTotalCents: 60000 },
     checkout: changed({ quantity: 2 }),
     selectedListingId: SELECTED_LISTING_ID,
-    expected: { overall: "blocked", totalCents: 53563, checks: { quantity: "fail", budget: "fail" } },
+    expected: { overall: "pass", totalCents: 53563, checks: { quantity: "pass" } },
   },
+  {
+    name: "quantity above an at_most quantity requirement: blocked",
+    preferences: {
+      ...basePreferences,
+      maxTotalCents: 60000,
+      requirements: [
+        ...basePreferences.requirements,
+        { id: "req_qty", attribute: "quantity", operator: "at_most", value: 1, priority: "required" },
+      ],
+    },
+    checkout: changed({ quantity: 2 }),
+    selectedListingId: SELECTED_LISTING_ID,
+    expected: { overall: "blocked", totalCents: 53563, checks: { quantity: "fail" } },
+  },
+  {
+    name: "unreadable delivery_by_date requirement: unknown, never assumed",
+    preferences: {
+      ...basePreferences,
+      requirements: [
+        { id: "req_delivery", attribute: "delivery_by_date", operator: "at_most", value: "next week", priority: "required" },
+      ],
+    },
+    checkout: baseCheckout,
+    selectedListingId: SELECTED_LISTING_ID,
+    expected: { overall: "needs_review", totalCents: 28563, checks: { delivery: "unknown" } },
+  },
+];
+
+// request bodies for the http routes. the item_match cases differ from evaluateCheckout:
+// a missing selected listing id is rejected with 400 before any review runs.
+export interface RouteRequestFixture {
+  name: string;
+  route: "review" | "confirm";
+  body: Record<string, unknown>;
+  expectedStatus: number;
+  expectedOverall?: CheckoutReview["overall"];
+}
+
+const reviewBody = { preferences: basePreferences, checkout: baseCheckout };
+const confirmBody = { ...reviewBody, reviewedVersion: 1, explicitConsent: true };
+
+export const routeRequestFixtures: RouteRequestFixture[] = [
+  { name: "review: ids match", route: "review", body: { ...reviewBody, selectedListingId: SELECTED_LISTING_ID }, expectedStatus: 200, expectedOverall: "pass" },
+  { name: "review: ids differ", route: "review", body: { ...reviewBody, selectedListingId: OTHER_LISTING_ID }, expectedStatus: 200, expectedOverall: "blocked" },
+  { name: "review: id missing", route: "review", body: reviewBody, expectedStatus: 400 },
+  { name: "review: id null", route: "review", body: { ...reviewBody, selectedListingId: null }, expectedStatus: 400 },
+  { name: "review: id blank", route: "review", body: { ...reviewBody, selectedListingId: "  " }, expectedStatus: 400 },
+  { name: "review: id not a string", route: "review", body: { ...reviewBody, selectedListingId: 42 }, expectedStatus: 400 },
+  { name: "confirm: ids match", route: "confirm", body: { ...confirmBody, selectedListingId: SELECTED_LISTING_ID }, expectedStatus: 200 },
+  { name: "confirm: ids differ", route: "confirm", body: { ...confirmBody, selectedListingId: OTHER_LISTING_ID }, expectedStatus: 409 },
+  { name: "confirm: id missing", route: "confirm", body: confirmBody, expectedStatus: 400 },
 ];

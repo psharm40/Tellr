@@ -116,18 +116,22 @@ export function validateCheckout(v: unknown): Validated<CheckoutSnapshot> {
   };
 }
 
-// optional: absent, or null as the shared session type stores it, means unknown.
-// a present value must be a non-empty string.
-export function validateSelectedListingId(v: unknown): Validated<string | undefined> {
-  if (v === undefined || v === null) return { ok: true, value: undefined };
-  if (!isNonEmptyString(v)) return { ok: false, error: "selectedListingId must be a non-empty string when provided" };
+// required by both routes (contract pr #1). a missing, null or blank id is a 400, never a guess.
+export const MISSING_SELECTED_LISTING_ERROR =
+  "selectedListingId is missing. Send the ID of the listing the shopper chose, so checkout can confirm it is the same item.";
+
+export function validateSelectedListingId(v: unknown): Validated<string> {
+  if (v === undefined || v === null || (typeof v === "string" && v.trim() === "")) {
+    return { ok: false, error: MISSING_SELECTED_LISTING_ERROR };
+  }
+  if (typeof v !== "string") return { ok: false, error: "selectedListingId must be a text ID, like \"listing_123\"." };
   return { ok: true, value: v };
 }
 
 export interface ReviewRequest {
   preferences: ShoppingPreferences;
   checkout: CheckoutSnapshot;
-  selectedListingId?: string;
+  selectedListingId: string;
 }
 
 export interface ConfirmRequest extends ReviewRequest {

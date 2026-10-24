@@ -11,7 +11,7 @@ import {
   checkoutFixtures,
 } from "./fixtures";
 import { formatCents } from "./money";
-import { validateConfirmRequest, validateReviewRequest } from "./validate";
+import { MISSING_SELECTED_LISTING_ERROR, validateConfirmRequest, validateReviewRequest } from "./validate";
 
 describe("evaluateCheckout fixtures", () => {
   for (const f of checkoutFixtures) {
@@ -34,22 +34,25 @@ describe("evaluateCheckout fixtures", () => {
   }
 });
 
+const itemMatch = (review: ReturnType<typeof evaluateCheckout>) =>
+  review.checks.find((c) => c.ruleId === "item_match")?.status;
+
 describe("item_match", () => {
   test("match passes", () => {
     const review = evaluateCheckout(basePreferences, baseCheckout, SELECTED_LISTING_ID);
-    assert.equal(review.checks[0].status, "pass");
+    assert.equal(itemMatch(review), "pass");
     assert.equal(review.overall, "pass");
   });
 
   test("mismatch fails and blocks", () => {
     const review = evaluateCheckout(basePreferences, baseCheckout, OTHER_LISTING_ID);
-    assert.equal(review.checks[0].status, "fail");
+    assert.equal(itemMatch(review), "fail");
     assert.equal(review.overall, "blocked");
   });
 
-  test("missing is unknown and critical, so overall is needs_review", () => {
+  test("missing (direct call) is unknown and critical, so overall is needs_review", () => {
     const review = evaluateCheckout(basePreferences, baseCheckout);
-    assert.equal(review.checks[0].status, "unknown");
+    assert.equal(itemMatch(review), "unknown");
     assert.equal(review.overall, "needs_review");
   });
 });
@@ -72,6 +75,12 @@ describe("money", () => {
 });
 
 describe("spoken summary", () => {
+  test("always discloses the quantity", () => {
+    const prefs = { ...basePreferences, maxTotalCents: 60000 };
+    const summary = evaluateCheckout(prefs, { ...baseCheckout, quantity: 2 }, SELECTED_LISTING_ID).spokenSummary;
+    assert.match(summary, /Quantity: 2\./);
+  });
+
   test("is deterministic and mentions the problem", () => {
     const checkout = { ...baseCheckout, version: 2, hasSubscription: true };
     const a = evaluateCheckout(basePreferences, checkout, SELECTED_LISTING_ID).spokenSummary;
@@ -89,15 +98,14 @@ describe("validation", () => {
     assert.equal(validateReviewRequest(body).ok, true);
   });
 
-  test("selectedListingId is optional; null is treated as missing", () => {
-    const absent = validateReviewRequest({ preferences: basePreferences, checkout: baseCheckout });
-    const asNull = validateReviewRequest({ ...body, selectedListingId: null });
-    assert.ok(absent.ok && absent.value.selectedListingId === undefined);
-    assert.ok(asNull.ok && asNull.value.selectedListingId === undefined);
+  test("selectedListingId is required: missing, null or blank is rejected in plain language", () => {
+    for (const selectedListingId of [undefined, null, "", "   "]) {
+      const result = validateReviewRequest({ ...body, selectedListingId });
+      assert.ok(!result.ok && result.error === MISSING_SELECTED_LISTING_ERROR);
+    }
   });
 
-  test("rejects an empty or non-string selectedListingId", () => {
-    assert.equal(validateReviewRequest({ ...body, selectedListingId: "" }).ok, false);
+  test("rejects a non-string selectedListingId", () => {
     assert.equal(validateReviewRequest({ ...body, selectedListingId: 42 }).ok, false);
   });
 
@@ -161,7 +169,7 @@ describe("confirmDemoOrder", () => {
     assert.ok(!result.ok && result.review.overall === "blocked");
   });
 
-  test("refuses when selectedListingId is missing", () => {
+  test("refuses when selectedListingId is missing (direct call)", () => {
     const result = confirmDemoOrder({ ...confirm, checkout: baseCheckout, reviewedVersion: 1 }, fixedId);
     assert.ok(!result.ok && result.review.overall === "needs_review");
   });
