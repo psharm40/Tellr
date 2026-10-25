@@ -14,10 +14,12 @@ export function listingIdFor(page) {
 export function buildListing(page, images) {
   const products = Array.isArray(page.products) ? page.products : [];
   const priced = products.filter((item) => Number.isInteger(item.priceCents) && item.priceCents > 0);
-  const focus = priced.length ? priced.reduce((a, b) => (a.priceCents <= b.priceCents ? a : b)) : null;
+  // on a listing page the other products are "similar items"; never name the listing after one
+  const focus =
+    page.pageKind === "listing" || !priced.length ? null : priced.reduce((a, b) => (a.priceCents <= b.priceCents ? a : b));
   return {
     id: listingIdFor(page),
-    title: focus?.title || page.title || "Untitled listing",
+    title: page.pageKind === "listing" ? page.title || focus?.title || "Untitled listing" : focus?.title || page.title || "Untitled listing",
     description: page.description || "",
     category: page.category || "item",
     itemPriceCents: Number.isInteger(page.itemPriceCents) && page.itemPriceCents > 0 ? page.itemPriceCents : focus?.priceCents ?? 0,
@@ -30,12 +32,14 @@ function money(cents) {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
-function namedProducts(products, pageTitle) {
+export function namedProducts(products, pageTitle) {
   return products.filter((item) => {
     const title = String(item.title || "").trim();
     if (title.length < 4) return false;
     if (/^priced item/i.test(title)) return false;
     if (/\b(gifts under|shop by|shop now|free shipping|% off)\b/i.test(title)) return false;
+    // promo and livestream tiles ("⚡ START ENERGY BREAKS ⚡") use emoji; product titles don't
+    if (/\p{Extended_Pictographic}/u.test(title)) return false;
     if (pageTitle && title === pageTitle) return false;
     return true;
   });
@@ -80,8 +84,11 @@ export function answerFromPage(question, page) {
   return spoken;
 }
 
-export function buildCheckout(page, selectedListingId, inspectedTitle) {
+// fallbackUnitCents is the inspected listing price. with neither, unitPriceCents stays 0 and
+// callers must refuse to review: a missing price is unknown, never a free item.
+export function buildCheckout(page, selectedListingId, inspectedTitle, fallbackUnitCents) {
   const hints = page.checkoutHints || {};
+  const fallback = Number.isInteger(fallbackUnitCents) && fallbackUnitCents > 0 ? fallbackUnitCents : 0;
   const matches = selectedListingId && titlesMatch(hints.cartTitle || page.title, inspectedTitle || page.title);
   return {
     id: `checkout_${shortId(page.url)}`,
@@ -89,7 +96,7 @@ export function buildCheckout(page, selectedListingId, inspectedTitle) {
     listingId: matches ? selectedListingId : listingIdFor(page),
     currency: "USD",
     quantity: Number.isInteger(hints.quantity) && hints.quantity > 0 ? hints.quantity : 1,
-    unitPriceCents: Number.isInteger(hints.unitPriceCents) ? hints.unitPriceCents : 0,
+    unitPriceCents: Number.isInteger(hints.unitPriceCents) && hints.unitPriceCents > 0 ? hints.unitPriceCents : fallback,
     shippingCents: hints.shippingCents ?? null,
     taxCents: hints.taxCents ?? null,
     addOns: Array.isArray(hints.addOns) ? hints.addOns : [],

@@ -10,6 +10,8 @@ const VOICE_ID = "a0e99841-438c-4a64-b679-ae501e7d6091";
 export const MAX_SPEAK_CHARS = 1500;
 export const TOKEN_TTL_SECONDS = 60;
 const UPSTREAM_TIMEOUT_MS = 15_000;
+// long answers take longer to synthesize; kept under the extension's 30s client timeout
+const SPEECH_TIMEOUT_MS = 25_000;
 
 export class VoiceServiceError extends Error {
   constructor(
@@ -44,13 +46,25 @@ function upstreamError(status: number, what: string): VoiceServiceError {
   if (status === 429) {
     return new VoiceServiceError(`Cartesia is rate limiting ${what} right now. Please try again shortly.`, 503);
   }
+  // 402 payment required: the account behind the server's key is out of credits
+  if (status === 402) {
+    return new VoiceServiceError(
+      "Tellr's voice account is out of credits, so I can't speak or listen right now. You can still type, and answers stay on screen.",
+      503,
+    );
+  }
   return new VoiceServiceError(`Cartesia couldn't complete ${what} (status ${status}).`, 502);
 }
 
-async function cartesiaFetch(path: string, init: RequestInit, what: string): Promise<Response> {
+async function cartesiaFetch(
+  path: string,
+  init: RequestInit,
+  what: string,
+  timeoutMs = UPSTREAM_TIMEOUT_MS,
+): Promise<Response> {
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, { ...init, signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
+    res = await fetch(`${API_BASE}${path}`, { ...init, signal: AbortSignal.timeout(timeoutMs) });
   } catch {
     throw new VoiceServiceError(`Couldn't reach Cartesia for ${what}.`, 504);
   }
@@ -89,12 +103,19 @@ export async function synthesizeSpeech(text: string): Promise<ArrayBuffer> {
         transcript: text,
         voice: { id: VOICE_ID },
         language: "en",
-        output_format: { container: "mp3", sample_rate: 44100, bit_rate: 128000 },
+        // 64 kbps is clear for one speaking voice and half the download of 128 kbps on slow wifi
+        output_format: { container: "mp3", sample_rate: 44100, bit_rate: 64000 },
       }),
     },
     "speech",
+    SPEECH_TIMEOUT_MS,
   );
-  return res.arrayBuffer();
+  // the timeout also covers reading the body, so a slow stream can abort here, after the headers
+  try {
+    return await res.arrayBuffer();
+  } catch {
+    throw new VoiceServiceError("Cartesia was too slow to finish the speech. The text is still shown.", 504);
+  }
 }
 
 // validates { text } bodies for /api/voice/speak
@@ -115,14 +136,16 @@ export function parseSpeakBody(body: unknown): string {
 // needs these voice routes; this is a coordinated edit to the voice owner file.
 export const TELLR_EXTENSION_ORIGIN = "chrome-extension://cjmaabcdoilmjgnmihmbcfhchnlhjimg";
 
+// only our extension id. the manifest key keeps it stable for unpacked loads too, so any
+// other chrome-extension:// origin is someone else's extension spending our quota.
+// optional TELLR_EXTENSION_IDS (comma-separated) adds ids for a re-keyed or store build.
 function isAllowedExtensionOrigin(origin: string): boolean {
   if (origin === TELLR_EXTENSION_ORIGIN) return true;
-  // unpacked loads without the manifest key get a random id; still our own extension pages
-  try {
-    return new URL(origin).protocol === "chrome-extension:";
-  } catch {
-    return false;
-  }
+  const extra = (process.env.TELLR_EXTENSION_IDS ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  return extra.some((id) => origin === `chrome-extension://${id}`);
 }
 
 // blocks random websites from spending our cartesia quota through these routes.

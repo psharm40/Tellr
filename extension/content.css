@@ -109,3 +109,57 @@
     height: 20px;
   }
 }
+
+/* tellr's own layer over the page: a box around the item being talked about, and the numbers
+   tellr reads out. drawn on top so the site's styles can't clip or override them. */
+#tellr-marks {
+  all: initial;
+  position: absolute !important;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  z-index: 2147483645;
+  pointer-events: none;
+}
+
+#tellr-marks .tellr-box {
+  all: initial;
+  position: absolute;
+  box-sizing: border-box;
+  border: 5px solid #ffd400;
+  border-radius: 12px;
+  box-shadow: 0 0 0 3px #141414, 0 0 0 12px rgb(255 212 0 / 0.3), 0 0 40px 16px rgb(255 212 0 / 0.5);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #tellr-marks .tellr-box {
+    animation: tellr-pulse 1.6s ease-in-out 3;
+  }
+}
+
+@keyframes tellr-pulse {
+  50% {
+    box-shadow: 0 0 0 3px #141414, 0 0 0 16px rgb(255 212 0 / 0.2), 0 0 60px 24px rgb(255 212 0 / 0.65);
+  }
+}
+
+#tellr-marks .tellr-badge {
+  all: initial;
+  position: absolute;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 9px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 800 19px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: #141414;
+  background: #ffd400;
+  border: 3px solid #141414;
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.4);
+  pointer-events: none;
+}

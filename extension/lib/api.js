@@ -51,6 +51,22 @@ export async function explainListing(backendUrl, { report, preferences, question
   return data.answer;
 }
 
+// which numbered results the shopper means ("the one with the red bow")
+export function chooseItems(backendUrl, { question, items, preferences }) {
+  return post(backendUrl, "/api/inspection/choose", { question, items, preferences }, 60_000);
+}
+
+// plain, sensory descriptions of listed results, read instead of brand-heavy titles
+// plain descriptions plus a fair verdict for each listed result, and one follow-up question
+export function describeItems(backendUrl, { items, preferences, notes }) {
+  return post(backendUrl, "/api/inspection/describe", { items, preferences, notes }, 90_000);
+}
+
+// ranks fully inspected items best first, with a fair verdict for the price
+export function judgeItems(backendUrl, { items, preferences, notes }) {
+  return post(backendUrl, "/api/inspection/judge", { items, preferences, notes }, 90_000);
+}
+
 export async function reviewCheckout(backendUrl, preferences, checkout, selectedListingId) {
   const data = await post(backendUrl, "/api/checkout/review", { preferences, checkout, selectedListingId });
   return data.review;

@@ -204,9 +204,10 @@ await t("IMG-2 http url rejected (ssrf-safe)", async () => {
   const r = imageVal.validateListingImages([{ id: "p", url: "https://example.com/a.png", alt: "a" }]);
   check("IMG-2 http url rejected (ssrf-safe)", r.ok === false);
 });
-await t("IMG-3 more than 3 images rejected", async () => {
-  const r = imageVal.validateListingImages(Array.from({ length: 4 }, (_, i) => ({ id: "p" + i, url: TINY_PNG, alt: "a" })));
-  check("IMG-3 more than 3 images rejected", r.ok === false);
+await t("IMG-3 more than MAX_IMAGES (8) images rejected", async () => {
+  const many = (n) => Array.from({ length: n }, (_, i) => ({ id: "p" + i, url: TINY_PNG, alt: "a" }));
+  check("IMG-3 more than MAX_IMAGES (8) images rejected", imageVal.validateListingImages(many(imageVal.MAX_IMAGES + 1)).ok === false);
+  check("IMG-3b a full listing gallery (8 photos) accepted", imageVal.validateListingImages(many(imageVal.MAX_IMAGES)).ok === true);
 });
 await t("IMG-4 empty list rejected", async () => {
   check("IMG-4 empty list rejected", imageVal.validateListingImages([]).ok === false);

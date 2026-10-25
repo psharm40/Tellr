@@ -4,7 +4,6 @@
   const PRICE = /(?:USD|US\$|\$)\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{2})?)/i;
   const PRICE_G = /(?:USD|US\$|\$)\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?)/g;
   const PRICE_AFTER = /([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)\s*(?:USD|dollars?)\b/gi;
-  const BARE_PRICE = /(?:^|[^\d])([0-9]{1,3}(?:,[0-9]{3})+\.[0-9]{2}|[0-9]+\.[0-9]{2})(?:[^\d]|$)/;
   const ADDON = /\b(protection plan|extended warranty|applecare|care plan|device protection|accidental damage|shipping protection|gift wrap)\b/i;
   const SUBSCRIBE = /\b(subscribe\s*(and|&)?\s*save|auto[- ]?renew|recurring|subscription)\b/i;
   const ONE_TIME = /\b(one[- ]time purchase|buy (it )?once|without subscription)\b/i;
@@ -106,7 +105,10 @@
         .pop();
       if (last) return last;
     }
-    return img.currentSrc || img.src || img.getAttribute("data-src") || img.getAttribute("data-old-src") || "";
+    // lazy galleries keep the real photo in data-* until it's scrolled to
+    const lazy = img.getAttribute("data-zoom-src") || img.getAttribute("data-src") || img.getAttribute("data-old-src") || "";
+    const src = img.currentSrc || img.src || "";
+    return !src || src.startsWith("data:") ? lazy : src;
   }
 
   function absoluteUrl(href) {
@@ -118,15 +120,23 @@
     }
   }
 
+  // the same photo at another size is still one photo: ebay's s-l64 and s-l1600, amazon's _AC_ sizes
+  function photoKey(href) {
+    const clean = href.split("?")[0];
+    return clean.match(/ebayimg\.com\/(?:images\/g|thumbs\/images\/g)\/([^/]+)\//i)?.[1] || clean.replace(/\._[^/]*?_\.(jpe?g|png|webp)$/i, ".$1");
+  }
+  // gallery thumbnails from these hosts are small on the page but get fetched full size
+  const RESIZABLE = /(^|\.)(ebayimg\.com|media-amazon\.com|ssl-images-amazon\.com)\//i;
+
   function pageImages() {
     const urls = [];
     const seen = new Set();
     function add(url, alt) {
       const href = absoluteUrl(url);
       if (!href || !/^https?:\/\//i.test(href)) return;
-      const clean = href.split("?")[0];
-      if (SKIP_IMG.test(href) || SKIP_IMG.test(alt || "") || seen.has(clean)) return;
-      seen.add(clean);
+      const key = photoKey(href);
+      if (SKIP_IMG.test(href) || SKIP_IMG.test(alt || "") || seen.has(key)) return;
+      seen.add(key);
       urls.push({ url: href, alt: alt || "" });
     }
     for (const node of jsonLdNodes()) {
@@ -136,14 +146,27 @@
     add(meta("og:image:secure_url"), meta("og:title"));
     const root = document.querySelector("main, #main, [role='main'], #dp, #productTitle") || document.body;
     for (const img of root.querySelectorAll("img")) {
+      // photos that link to a different listing ("similar items") are not this item
+      if (linksToOtherItem(img)) continue;
       const src = imgUrl(img);
       const w = img.naturalWidth || Number(img.getAttribute("width")) || 0;
       const h = img.naturalHeight || Number(img.getAttribute("height")) || 0;
-      if (w && h && (w < 120 || h < 120)) continue;
+      if (w && h && (w < 120 || h < 120) && !RESIZABLE.test(src.replace(/^https?:\/\//, ""))) continue;
       add(src, img.alt);
       if (urls.length >= 12) break;
     }
     return urls.slice(0, 12);
+  }
+
+  // listing pages on marketplaces: /itm/<id> on ebay, /dp/<asin> on amazon
+  const ITEM_PATH = /\/(?:itm|dp|gp\/product)\/(?:[^/]*\/)?([A-Za-z0-9]{6,})/;
+
+  function linksToOtherItem(img) {
+    const href = img.closest("a[href]")?.href;
+    if (!href) return false;
+    const here = location.href.match(ITEM_PATH)?.[1];
+    const there = href.match(ITEM_PATH)?.[1];
+    return !!there && there !== here;
   }
 
   function heading() {
@@ -256,17 +279,25 @@
     return items;
   }
 
+  // ebay has used both "s-item" and newer "s-card" result markup; read either. the item link is
+  // the one pointing at /itm/ (the first link in a card can be an image or a "sponsored" link).
   function productsFromEbay() {
     const items = [];
-    for (const card of document.querySelectorAll("li.s-item")) {
-      const title = usefulTitle(text(card.querySelector(".s-item__title, .s-item__title span")));
-      const cents = centsFromText(text(card.querySelector(".s-item__price")));
+    for (const card of document.querySelectorAll("li.s-item, li.s-card, div.s-card")) {
+      const title = usefulTitle(
+        text(card.querySelector(".s-item__title, .s-card__title, [role='heading']"))
+          .replace(/^new listing\s*/i, "")
+          .replace(/\s*opens in a new window or tab$/i, ""),
+      );
+      const cents = centsFromText(text(card.querySelector(".s-item__price, .s-card__price")));
       if (!title || cents == null || /shop on ebay/i.test(title)) continue;
       items.push({
         title,
         priceCents: cents,
-        url: absoluteUrl(card.querySelector("a")?.href || ""),
+        url: absoluteUrl(card.querySelector("a[href*='/itm/']")?.href || card.querySelector("a")?.href || ""),
         imageUrl: imgUrl(card.querySelector("img")),
+        // "Pre-owned", "New (Other)": helps with "the less worn ones"
+        condition: text(card.querySelector(".s-item__subtitle .SECONDARY_INFO, .SECONDARY_INFO, .s-card__subtitle")).slice(0, 80),
       });
       if (items.length >= 40) break;
     }
@@ -460,6 +491,17 @@
       ...productsFromPrices(),
       ...productsFromAttributes(),
     ]);
+    // on big marketplaces the generic scrapers also catch promo tiles (ebay live auctions,
+    // sponsored banners). real listings link to an item page, so keep only those when we can.
+    const itemLink = /(^|\.)ebay\./i.test(location.hostname)
+      ? /\/itm\//i
+      : /(^|\.)amazon\./i.test(location.hostname)
+        ? /\/(dp|gp\/product)\//i
+        : null;
+    if (itemLink) {
+      const listings = named.filter((item) => itemLink.test(item.url || ""));
+      if (listings.length) return listings;
+    }
     if (named.length) return named;
     return dedupeProducts(productsFromVisibleText());
   }
@@ -489,16 +531,31 @@
     return { cents: null, currency: "USD" };
   }
 
-  function nearbyPrice(pattern) {
+  // a money row: a short label ("Tax", "Estimated tax:", "Shipping") with its price on the
+  // same row. fine print like "sales tax may apply" is skipped: taking whatever price sat near
+  // it read a $14.99 shipping cost as tax.
+  function labeledPrice(label) {
+    const whole = new RegExp(`^${label.source}\\s*:?\\s*(.*)$`, "i");
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     while (walker.nextNode()) {
       const value = walker.currentNode.nodeValue.replace(/\s+/g, " ").trim();
-      if (!pattern.test(value)) continue;
-      const cents = centsFromText(value);
-      if (cents != null) return cents;
-      const sibling = walker.currentNode.parentElement?.parentElement;
-      const nearby = centsFromText(text(sibling));
-      if (nearby != null) return nearby;
+      if (!value || value.length > 40) continue;
+      const match = value.match(whole);
+      if (!match) continue;
+      const rest = match[1];
+      if (rest) {
+        const inline = centsFromText(rest);
+        if (inline != null) return inline;
+        // "(estimated)" is still a label; anything else is a sentence, not a row
+        if (!/^\(?(estimated|est\.?)\)?:?$/i.test(rest)) continue;
+      }
+      let row = walker.currentNode.parentElement;
+      for (let depth = 0; depth < 3 && row; depth += 1, row = row.parentElement) {
+        const rowText = text(row);
+        if (rowText.length > 120) break;
+        const cents = centsFromText(rowText.replace(value, ""));
+        if (cents != null) return cents;
+      }
     }
     return null;
   }
@@ -559,12 +616,119 @@
 
   function shippingCents() {
     if (SHIP_FREE.test(text(document.body).slice(0, 20_000))) return 0;
-    return nearbyPrice(/\bshipping\b/i);
+    return labeledPrice(/(?:estimated |est\.? )?(?:shipping|delivery|postage)(?: (?:and|&) handling)?(?: (?:cost|fee|price))?/);
   }
 
   function taxCents() {
     if (/\btax (calculated|to be calculated)\b/i.test(text(document.body).slice(0, 20_000))) return null;
-    return nearbyPrice(/\btax\b/i);
+    return labeledPrice(/(?:estimated |est\.? )?(?:sales )?tax(?:es)?(?: \(estimated\))?/);
+  }
+
+  // --- facts on a listing, grouped by topic: the seller's track record, how popular the item
+  // is, condition, returns, shipping, and the item's specifics. read as written on the page;
+  // nothing here is a judgement.
+  const FACT_GROUP = [
+    ["condition", /\bcondition\b/i],
+    ["returns", /\breturns?\b/i],
+    ["shipping", /\b(shipping|delivery|located in|ships (from|to)|postage|handling time)\b/i],
+    ["payment", /\b(payments?|pay later|financing)\b/i],
+  ];
+
+  function labelValuePairs() {
+    const pairs = [];
+    const add = (label, value) => {
+      label = label.replace(/\s*:\s*$/, "").trim();
+      value = value.replace(/\s+/g, " ").replace(/\bSee (all )?details\b.*$/i, "").replace(/\bRead more\b.*$/i, "").trim();
+      if (!label || !value || label.length > 40 || value.length > 160) return;
+      if (pairs.some((p) => p.label.toLowerCase() === label.toLowerCase())) return;
+      pairs.push({ label, value });
+    };
+    // ebay item specifics and the shipping / returns rows
+    for (const row of document.querySelectorAll(".ux-labels-values, .ux-layout-section-evo__row > div")) {
+      const label = text(row.querySelector(".ux-labels-values__labels"));
+      const value = text(row.querySelector(".ux-labels-values__values"));
+      if (label && value) add(label, value);
+    }
+    for (const dt of document.querySelectorAll("dl dt")) {
+      const dd = dt.nextElementSibling;
+      if (dd?.tagName === "DD") add(text(dt), text(dd));
+    }
+    // amazon detail tables and "label : value" bullets
+    for (const tr of document.querySelectorAll("#productDetails_techSpec_section_1 tr, #productDetails_detailBullets_sections1 tr, #productOverview_feature_div tr, table.a-keyvalue tr")) {
+      add(text(tr.querySelector("th, td:first-child")), text(tr.querySelector("td:last-child")));
+    }
+    for (const li of document.querySelectorAll("#detailBullets_feature_div li")) {
+      const [label, ...rest] = text(li).split(/\s*:\s*/);
+      if (rest.length) add(label.replace(/[‎‏]/g, ""), rest.join(": ").replace(/[‎‏]/g, ""));
+    }
+    return pairs.slice(0, 40);
+  }
+
+  // the smallest block around "positive feedback": the seller card
+  function sellerCard() {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      if (!/positive( feedback)?|seller rating|sold by/i.test(walker.currentNode.nodeValue)) continue;
+      let el = walker.currentNode.parentElement;
+      while (el.parentElement && text(el.parentElement).length < 500) el = el.parentElement;
+      if (!el.closest("#tellr-root")) return el;
+    }
+    return null;
+  }
+
+  function sellerFacts() {
+    const card = sellerCard();
+    const said = text(card);
+    const facts = [];
+    const name =
+      text(card?.querySelector("a[href*='/usr/'], a[href*='/str/'], .x-sellercard-atf__info__about-seller a, #sellerProfileTriggerId")) ||
+      said.match(/\bsold by:?\s*([^\n.,]{2,40}?)(?:\s+(?:and|ships|\d)|$)/i)?.[1] ||
+      "";
+    if (name) facts.push({ label: "Seller", value: name.slice(0, 50) });
+    const percent = said.match(/(\d{2,3}(?:\.\d)?)\s*%\s*positive/i)?.[1];
+    if (percent) facts.push({ label: "Positive feedback", value: `${percent}%` });
+    const ratings = said.match(/\(\s*([\d.,]+\s*[KkMm]?)\s*\)/)?.[1] || said.match(/([\d.,]+\s*[KkMm]?)\s+(?:ratings|feedback ratings|reviews)\b/i)?.[1];
+    if (ratings) facts.push({ label: "Ratings", value: ratings.replace(/\s+/g, "") });
+    const sold = said.match(/([\d.,]+\s*[KkMm]?)\s+items? sold/i)?.[1];
+    if (sold) facts.push({ label: "Items sold", value: sold.replace(/\s+/g, "") });
+    if (/top rated/i.test(said)) facts.push({ label: "Badge", value: "Top Rated Seller" });
+    const joined = said.match(/(?:joined|member since:?)\s+([A-Z][a-z]{2,8}\.?\s+\d{4}|\d{4})/i)?.[1];
+    if (joined) facts.push({ label: "Joined", value: joined });
+    const responds = said.match(/usually responds within\s+(\d+\s+(?:minutes?|hours?|days?))/i)?.[1];
+    if (responds) facts.push({ label: "Usually responds within", value: responds });
+    return facts;
+  }
+
+  // "245 sold", "12 watchers", "in 5 carts", "3 available", amazon's "1K+ bought in past month"
+  function popularityFacts() {
+    const root = document.querySelector("#mainContent, .x-buybox, #centerCol, #ppd, main, [role='main']") || document.body;
+    const said = text(root).slice(0, 8000);
+    const facts = [];
+    const add = (label, match, i = 1) => {
+      if (match) facts.push({ label, value: match[i].replace(/\s+/g, "") });
+    };
+    add("Sold", said.match(/(?<!items?\s)\b([\d,]+\+?)\s+sold\b/i));
+    add("Watching", said.match(/\b([\d,]+\+?)\s+(?:watchers|watching|people are watching|have this in their watchlist)\b/i));
+    add("In carts", said.match(/\b(?:in\s+)?([\d,]+\+?)\s+(?:carts|people have this in their cart|have added this to their cart)\b/i));
+    add("Available", said.match(/\b([\d,]+|more than \d+)\s+available\b/i));
+    add("Bought recently", said.match(/\b([\d.,]+[KkMm]?\+?)\s+bought in (?:the )?past month\b/i));
+    const stars = said.match(/\b(\d(?:\.\d)?)\s+out of 5 stars\b/i);
+    if (stars) facts.push({ label: "Customer rating", value: `${stars[1]} out of 5` });
+    add("Customer ratings", said.match(/\b([\d,]+)\s+(?:global )?ratings\b/i));
+    if (/\blast one\b|\bonly 1 left\b/i.test(said)) facts.push({ label: "Stock", value: "last one" });
+    else if (/\balmost gone\b/i.test(said)) facts.push({ label: "Stock", value: "almost gone" });
+    if (/money back guarantee/i.test(said)) facts.push({ label: "Protection", value: "eBay Money Back Guarantee shown on the page" });
+    return facts;
+  }
+
+  function pageFacts() {
+    const groups = { seller: sellerFacts(), popularity: popularityFacts(), condition: [], returns: [], shipping: [], payment: [], specifics: [] };
+    for (const pair of labelValuePairs()) {
+      if (/^(seller|sold by)$/i.test(pair.label)) continue;
+      const group = FACT_GROUP.find(([, pattern]) => pattern.test(pair.label))?.[0] || "specifics";
+      groups[group].push(pair);
+    }
+    return groups;
   }
 
   function extractPage() {
@@ -578,14 +742,40 @@
         ? products.map((p, i) => `${i + 1}. ${p.title} — $${(p.priceCents / 100).toFixed(2)}`).join("\n")
         : "";
     const cartTitle = text(document.querySelector("[data-item-title], .cart-item-title, .sc-product-title")) || title;
-    const imageUrls = [
-      ...products.filter((p) => p.imageUrl).map((p) => ({ url: p.imageUrl, alt: p.title })),
-      ...pageImages(),
-    ].slice(0, 12);
+    // which kind of page this is. prices can't tell: a results page also "has a price"
+    // (its first result's). marketplace url shapes are reliable; elsewhere, count products.
+    const pageKind = ITEM_PATH.test(location.href)
+      ? "listing"
+      : /\/sch\/|\/s\?|[?&](?:k|_nkw|q|query|search)=/i.test(location.href) || products.length > 1
+        ? "results"
+        : "listing";
+    // where the shopper is, for "where am i" and the welcome: home, results, listing, cart, checkout
+    const place = /^pay\.|^checkout\./i.test(location.hostname) || /\/(checkout|chk|gp\/buy|buy\/)/i.test(location.pathname)
+      ? "checkout"
+      : /\/(cart|sc|gp\/cart|basket)\b/i.test(location.pathname) || /^cart\./i.test(location.hostname)
+        ? "cart"
+        : location.pathname === "/" || location.pathname === ""
+          ? "home"
+          : pageKind;
+    const params = new URLSearchParams(location.search);
+    const searchQuery = (params.get("_nkw") || params.get("k") || params.get("q") || params.get("query") || "").slice(0, 80);
+    // a single listing must be inspected from its own gallery only; mixing in thumbnails of
+    // other products on the page would have claude inspect the wrong item
+    const singleListing = pageKind === "listing";
+    const imageUrls = (
+      singleListing
+        ? pageImages()
+        : [...products.filter((p) => p.imageUrl).map((p) => ({ url: p.imageUrl, alt: p.title })), ...pageImages()]
+    ).slice(0, 12);
     return {
       url: location.href,
+      pageKind,
+      place,
+      searchQuery,
+      facts: singleListing ? pageFacts() : null,
       title,
-      description: [written, catalog && `Items visible on this page:\n${catalog}`, `Page text: ${visibleText()}`]
+      // on a listing, other products' titles ("similar items") would read as details of this item
+      description: [written, !singleListing && catalog && `Items visible on this page:\n${catalog}`, `Page text: ${visibleText()}`]
         .filter(Boolean)
         .join("\n\n")
         .slice(0, 4000),

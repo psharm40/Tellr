@@ -132,6 +132,21 @@ textarea {
   min-height: 1.4em;
 }
 
+/* live caption of tellr's voice: large and high contrast for low-vision shoppers */
+.caption {
+  margin: 0;
+  padding: 12px 14px;
+  font-size: 20px;
+  line-height: 1.4;
+  color: var(--paper);
+  background: var(--ink);
+  border-radius: 14px;
+}
+
+.caption[hidden] {
+  display: none;
+}
+
 .tone-good {
   color: var(--good);
 }

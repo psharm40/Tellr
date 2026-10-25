@@ -10,18 +10,33 @@
       <header class="stack">
         <p class="kicker">Tellr</p>
         <h1 id="tellr-title">Check this page before you buy</h1>
-        <p class="muted">Hold your shortcut and talk, or type. I read the photos and fees on this page. I never place a real order.</p>
+        <p class="muted">Talk or type. I check the photos and fees on the page you're shopping. I never place a real order.</p>
         <p id="live" class="live muted" role="status" aria-live="polite"></p>
+        <!-- hidden from screen readers: they'd read it over tellr's own voice. the full answer is below -->
+        <p id="caption" class="caption" aria-hidden="true" hidden></p>
+        <p id="answer" class="muted"></p>
       </header>
 
-      <form id="ask-form" class="card">
-        <label for="ask">Ask Tellr</label>
-        <textarea id="ask" name="ask" maxlength="2000" placeholder="Used laptop under $400, no cracks, charger included"></textarea>
+      <section class="card" aria-labelledby="talk-title">
+        <h2 id="talk-title">Talk to Tellr</h2>
         <div class="row">
-          <button class="primary" type="submit">Send</button>
-          <button type="button" id="listen">Hold to talk in the page</button>
+          <button class="primary" type="button" id="listen" aria-pressed="false">Start listening</button>
+          <button type="button" id="stop-speaking">Stop speaking</button>
+          <button type="button" id="pause" aria-pressed="false">Pause Tellr</button>
+        </div>
+        <div class="row">
+          <button type="button" id="help">What can I say?</button>
+          <button type="button" id="repeat">Say that again</button>
         </div>
         <p id="shortcut" class="muted"></p>
+      </section>
+
+      <form id="ask-form" class="card">
+        <label for="ask">Or type to Tellr</label>
+        <textarea id="ask" name="ask" maxlength="2000" placeholder="Find black jackets under $100 on eBay"></textarea>
+        <div class="row">
+          <button class="primary" type="submit">Send</button>
+        </div>
       </form>
 
       <section class="card" aria-labelledby="step-1">
@@ -30,24 +45,38 @@
       </section>
 
       <section class="card" aria-labelledby="step-2">
-        <h2 id="step-2">2 · This listing</h2>
-        <div id="listing" class="muted">Open a product page, then inspect it.</div>
-        <button type="button" id="inspect">Inspect this page</button>
+        <h2 id="step-2">2 · Pick and check an item</h2>
+        <div id="results"></div>
+        <div class="row">
+          <button type="button" id="list">List items on this page</button>
+          <button type="button" id="more" hidden>More items</button>
+          <button type="button" id="compare">Compare top 3</button>
+        </div>
+        <div id="listing" class="muted">Open a product page, then check it.</div>
+        <button type="button" id="inspect">Check this item</button>
+        <div id="facts" hidden>
+          <h3>About this listing</h3>
+          <p class="muted">As written on the page. Ask about any of these, like: can I trust this seller?</p>
+          <div id="facts-groups"></div>
+        </div>
       </section>
 
       <section class="card" aria-labelledby="step-3">
         <h2 id="step-3">3 · Checkout</h2>
-        <div id="checkout" class="muted">Inspect first, then review the cart or checkout page.</div>
+        <div id="checkout" class="muted">Check the item first, then review the cart or checkout page.</div>
         <button type="button" id="review">Review checkout</button>
       </section>
 
       <section class="card" aria-labelledby="step-4">
         <h2 id="step-4">4 · Demo confirm</h2>
         <div id="confirm-copy" class="muted">Confirmation is a demo only. No payment. No retailer purchase.</div>
-        <button type="button" id="confirm" disabled>Confirm demo order</button>
+        <div class="row">
+          <button type="button" id="confirm" disabled>Confirm demo order</button>
+          <button type="button" id="cancel-confirm" hidden>Cancel</button>
+        </div>
       </section>
 
-      <p><a href="options.html">Settings</a></p>
+      <p><a href="options.html">Settings</a> · <a href="#" id="shortcuts-link">Change keyboard shortcuts</a></p>
     </main>
     <script type="module" src="sidepanel.js"></script>
   </body>

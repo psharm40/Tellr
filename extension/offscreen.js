@@ -1,14 +1,63 @@
 // mic capture, cartesia ink, and spoken playback. no backend keys here.
 import { fetchVoiceToken } from "./lib/api.js";
 import { createTalkGate } from "./lib/talkGate.js";
-import { getBackendUrl } from "./lib/settings.js";
 import { createSttSession, startMicCapture } from "./lib/stt.js";
+// offscreen documents only get chrome.runtime, not chrome.storage, so settings can't be read
+// here. the service worker resolves the server address and sends it with offscreen-start.
 
 const gate = createTalkGate();
 let playback = null;
 let port = null;
 
+// short tones so someone who can't see the screen knows when the mic is live
+let toneCtx = null;
+function tone(freqs, peak = 0.18) {
+  try {
+    toneCtx ??= new AudioContext();
+    if (toneCtx.state === "suspended") void toneCtx.resume();
+    let at = toneCtx.currentTime + 0.01;
+    for (const freq of freqs) {
+      const osc = toneCtx.createOscillator();
+      const gain = toneCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, at);
+      gain.gain.exponentialRampToValueAtTime(peak, at + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.11);
+      osc.connect(gain).connect(toneCtx.destination);
+      osc.start(at);
+      osc.stop(at + 0.12);
+      at += 0.09;
+    }
+  } catch {
+    // no audio device; the visual bubble still shows the state
+  }
+}
+const MIC_ON = [660, 990]; // rising: recording now
+const MIC_OFF = [990, 660]; // falling: stopped, working on it
+const MIC_ERROR = [330, 247]; // low: something went wrong
+const POWER_ON = [440, 660, 880]; // three rising: tellr turned on
+const POWER_OFF = [880, 660, 440]; // three falling: tellr turned off
+const NAMED_TONES = { on: POWER_ON, off: POWER_OFF, error: MIC_ERROR };
+
+// a soft tick every 1.5 seconds while tellr is working on an answer, so a quiet moment never
+// sounds like it broke. the first tick waits a moment, so quick answers make no tick at all.
+let workingTimer = null;
+function setWorking(on) {
+  clearTimeout(workingTimer);
+  clearInterval(workingTimer);
+  workingTimer = null;
+  if (!on) return;
+  workingTimer = setTimeout(() => {
+    tone([520], 0.05);
+    workingTimer = setInterval(() => tone([520], 0.05), 1500);
+  }, 1200);
+}
+
 function emit(gen, event) {
+  if (event?.type === "mic_granted") tone(MIC_ON);
+  else if (event?.type === "processing") tone(MIC_OFF);
+  else if (event?.type === "error") tone(MIC_ERROR);
   try {
     port?.postMessage({ type: "stt-event", event, gen });
   } catch {
@@ -24,10 +73,11 @@ function handleCommand(message) {
       // nothing playing
     }
     const gen = message.gen;
+    const backendUrl = message.backendUrl;
     gate.start(gen, () =>
       createSttSession(
         {
-          fetchToken: async () => fetchVoiceToken(await getBackendUrl()),
+          fetchToken: async () => fetchVoiceToken(backendUrl),
           startCapture: (onChunk) => startMicCapture(onChunk, (level) => emit(gen, { type: "level", level })),
         },
         (event) => emit(gen, event),
@@ -37,6 +87,22 @@ function handleCommand(message) {
   if (message?.type === "offscreen-stop") gate.stop(message.gen);
   if (message?.type === "offscreen-kill") gate.clear();
   if (message?.type === "offscreen-speak") void play(message.audioBase64);
+  if (message?.type === "offscreen-working") setWorking(Boolean(message.on));
+  if (message?.type === "offscreen-tone" && NAMED_TONES[message.name]) tone(NAMED_TONES[message.name]);
+  if (message?.type === "offscreen-stop-speech") stopPlayback();
+}
+
+function stopPlayback() {
+  const current = playback;
+  playback = null;
+  if (!current) return;
+  try {
+    current.pause();
+  } catch {
+    // already stopped
+  }
+  // pausing doesn't fire onended, so run the cleanup it would have done
+  current.onerror?.();
 }
 
 function connect() {
@@ -64,6 +130,7 @@ function speakDone() {
 }
 
 async function play(audioBase64) {
+  setWorking(false);
   try {
     playback?.pause();
   } catch {
@@ -83,6 +150,8 @@ async function play(audioBase64) {
   };
   try {
     await playback.play();
+    // the service worker paces the live caption to the audio's length
+    port?.postMessage({ type: "offscreen-playing", durationSec: playback?.duration });
   } catch {
     speakDone();
   }

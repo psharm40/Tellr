@@ -59,8 +59,20 @@ export function isModifierCode(code) {
   return MODIFIER_CODES.has(code);
 }
 
+// keys macOS or VoiceOver already own. a blind user must never have tellr and the system
+// fight over the same key, or it's unclear who is listening.
+const SYSTEM_CONFLICTS = [
+  { when: (h) => h.meta && h.code === "Space", why: "Command+Space opens Spotlight and Siri. Pick another key." },
+  { when: (h) => h.ctrl && h.alt, why: "Control+Option is the VoiceOver key. Pick another key." },
+  { when: (h) => h.ctrl && h.code === "Space", why: "Control+Space switches keyboard languages on Mac. Pick another key." },
+  { when: (h) => h.meta && h.code === "F5", why: "Command+F5 turns VoiceOver on and off. Pick another key." },
+  { when: (h) => h.alt && h.shift && (h.code === "KeyL" || h.code === "KeyT"), why: "Tellr already uses that for its toggle and side panel shortcuts." },
+];
+
 export function holdKeyProblem(hold) {
   if (!hold.code || isModifierCode(hold.code)) return "Press a key together with the modifier.";
+  const conflict = SYSTEM_CONFLICTS.find((rule) => rule.when(hold));
+  if (conflict) return conflict.why;
   const fKey = /^F\d{1,2}$/.test(hold.code);
   if (!fKey && !hold.alt && !hold.ctrl && !hold.meta) return "Use Option, Control, or Command with the key, or use an F key.";
   for (const rule of BLOCKED) {
