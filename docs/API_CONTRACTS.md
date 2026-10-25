@@ -7,10 +7,11 @@ Every server route must validate input and return `{ error: string }` with a non
 |---|---|---|---|---|
 | `/api/requirements` | POST | `{ text: string }` | `{ preferences: ShoppingPreferences, clarificationQuestions: string[] }` | Inspection |
 | `/api/inspection` | POST | `{ listing: Listing, preferences: ShoppingPreferences }` | `{ report: InspectionReport }` | Inspection |
-| `/api/voice/token` | POST | `{}` | `{ token: string, expiresAt?: string }` *only if short-lived browser tokens are supported/configured* | Voice |
-| `/api/voice/speak` | POST | `{ text: string }` | Audio stream or JSON; voice owner documents final format before integration | Voice |
-| `/api/checkout/review` | POST | `{ preferences: ShoppingPreferences, checkout: CheckoutSnapshot }` | `{ review: CheckoutReview }` | Checkout |
-| `/api/checkout/confirm` | POST | `{ preferences: ShoppingPreferences, checkout: CheckoutSnapshot, reviewedVersion: number, explicitConsent: true }` | `{ demoOrderId: string, status: "demo_completed" }` | Checkout |
+| `/api/voice/token` | POST | `{}` | `{ token: string, expiresAt?: string }` | Voice |
+| `/api/voice/speak` | POST | `{ text: string }` | Audio stream or JSON | Voice |
+| `/api/checkout/review` | POST | `{ preferences: ShoppingPreferences, checkout: CheckoutSnapshot, selectedListingId: string }` | `{ review: CheckoutReview }` | Checkout |
+| `/api/checkout/confirm` | POST | `{ preferences: ShoppingPreferences, checkout: CheckoutSnapshot, selectedListingId: string, reviewedVersion: number, explicitConsent: true }` | `{ demoOrderId: string, status: "demo_completed" }` | Checkout |
+
 
 Notes:
 - Do not build backend routes by copying arbitrary results from the LLM into checkout fields.
@@ -21,3 +22,9 @@ Notes:
 - The backend must recompute the review on confirmation. For production, an authoritative server-held session and checkout version would be required to prevent client-controlled state; this hackathon API only records a simulated order.
 - `confirm` MUST NOT trigger any external purchase.
 - Changing these request/response shapes requires coordinated approval.
+- `selectedListingId` is required in both checkout requests.
+- `item_match` compares `checkout.listingId` with `selectedListingId`.
+- Matching IDs → `pass`.
+- Mismatched IDs → `fail` and block confirmation.
+- Missing `selectedListingId` → reject the request and block confirmation.
+- The frontend must provide `selectedListingId` in both requests.
