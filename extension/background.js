@@ -27,7 +27,7 @@ import {
 } from "./lib/format.js";
 import { listingImagesFromUrls, thumbnailFor } from "./lib/images.js";
 import { forServer, mergeSaved, queueOp } from "./lib/saved.js";
-import { NO_PREFERENCE, SIZE_KIND_NAME, SKIP_ASKING, answerFits, answersSoFar, normalizeSize, profileLine, sizeKindIn, sizeStatement, askable, basicQuestion, missingBasics, recapSpeech, topicOf } from "./lib/interview.js";
+import { NO_PREFERENCE, SIZE_KIND_NAME, SKIP_ASKING, answerFits, sizeAnswer, answersSoFar, normalizeSize, profileLine, sizeKindIn, sizeStatement, askable, basicQuestion, missingBasics, recapSpeech, topicOf } from "./lib/interview.js";
 import { MAX_COMPARE, classifyIntent, isInspectCommand, parseCompareList, parseItemNumber, parseSavedNumber, parseSiteSearch } from "./lib/intent.js";
 import { keywordsFrom, priceBounds, screenResults, screeningSummary } from "./lib/screen.js";
 import { SITE_NAME, buildSearch, changesSearch, describeSearch, sameSearch as sameSearchAs, searchUrl, siteOf } from "./lib/search.js";
@@ -1633,10 +1633,11 @@ function recordAnswer(said) {
     session = { ...session, awaiting: waiting.repeated ? null : { ...waiting, unanswered: true } };
     return null;
   }
-  let answer = said.trim().slice(0, 200);
+  // without the transcript's own full stop, so it reads "Got it: forty dollars."
+  let answer = said.trim().slice(0, 200).replace(/[.!?]+$/, "");
   if (NO_PREFERENCE.test(answer)) answer = "no preference";
   // "8" to "what size?" is a size, so the search and the screening read it as one
-  else if (waiting.topic === "size" && /^\d{1,2}(?:\.5)?(?:\s*(?:wide|w|narrow|n))?[.!]*$/i.test(answer)) answer = `size ${answer.replace(/[.!]+$/, "")}`;
+  else if (waiting.topic === "size" && sizeAnswer(answer)) answer = `size ${sizeAnswer(answer)}`;
   const asked = [...(session.asked || [])];
   for (let i = asked.length - 1; i >= 0; i -= 1) {
     if (asked[i].question === waiting.question && !asked[i].answer) {

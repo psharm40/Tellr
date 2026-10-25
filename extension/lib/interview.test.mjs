@@ -1,7 +1,21 @@
 // run: node --test extension/lib/*.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { NO_PREFERENCE, SKIP_ASKING, answerFits, answersSoFar, normalizeSize, profileLine, sizeKindIn, sizeStatement, askable, basicQuestion, missingBasics, recapSpeech, topicOf, wasAsked } from "./interview.js";
+import { NO_PREFERENCE, SKIP_ASKING, answerFits, answersSoFar, normalizeSize, profileLine, sizeAnswer, sizeKindIn, sizeStatement, askable, basicQuestion, missingBasics, recapSpeech, topicOf, wasAsked } from "./interview.js";
+
+test("a size said as words is still the answer to the size question", () => {
+  // speech-to-text often writes a one-word reply as a word, with a full stop
+  for (const [said, size] of [["8", "8"], ["Eight.", "8"], ["size eight", "8"], ["Eight and a half.", "8.5"], ["8.5", "8.5"], ["eight wide", "8 wide"], ["8W", "8 wide"], ["Medium.", "M"], ["I wear a medium", "M"], ["size 10", "10"]]) {
+    assert.ok(answerFits("size", said), said);
+    assert.equal(sizeAnswer(said), size, said);
+  }
+  assert.equal(normalizeSize("Eight."), "8");
+  assert.equal(normalizeSize("eight and a half"), "8.5");
+  // not a size: a new statement, or no preference
+  assert.ok(!answerFits("size", "actually I want boots"));
+  assert.equal(sizeAnswer("doesn't matter"), "");
+  assert.equal(sizeAnswer("I want brown ones"), "");
+});
 
 test("questions are grouped by topic, however they're worded", () => {
   assert.equal(topicOf("What shoe size do you wear?"), "size");

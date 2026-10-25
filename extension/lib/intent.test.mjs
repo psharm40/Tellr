@@ -347,6 +347,38 @@ test("never mind cancels; it never resets what the shopper wants", () => {
   assert.equal(classifyIntent("never mind", { ...shopping, pendingConfirm: { version: 1 } }), "cancel-confirm");
 });
 
+test("a page of other things never wipes the answers while the shopper is still answering", async () => {
+  const { forgetStaleGoal } = await import("./session.js");
+  const headphones = ["Wireless Earbuds Headphones", "Noise Cancelling Headphones", "Kids Headphones", "Gaming Headset Headphones"].map((title) => ({ title }));
+  const answering = {
+    preferences: { category: "women's loafers" },
+    requirementsTurns: ["black loafers"],
+    asked: [{ topic: "size", question: "What shoe size do you wear?", answer: "size 8" }],
+    awaiting: { topic: "budget", question: "What's the most you'd like to spend?" },
+    interviewDone: false,
+    pageUrl: "https://www.amazon.com/",
+    results: [],
+    history: [],
+  };
+  // still answering, on a page of headphone deals (the home page or a results page): all kept, every turn
+  for (const page of [
+    { url: "https://www.amazon.com/", place: "home", pageKind: "results", products: headphones },
+    { url: "https://www.amazon.com/s?k=headphones", place: "results", pageKind: "results", products: headphones },
+  ]) {
+    const kept = forgetStaleGoal(answering, page, "no more than $40");
+    assert.equal(kept.preferences.category, "women's loafers");
+    assert.deepEqual(kept.asked, answering.asked);
+    assert.deepEqual(kept.awaiting, answering.awaiting);
+  }
+  // after the search, the home page's deals still don't count
+  const searched = { ...answering, interviewDone: true, pageUrl: "https://www.amazon.com/s?k=loafers" };
+  assert.ok(forgetStaleGoal(searched, { url: "https://www.amazon.com/", place: "home", pageKind: "results", products: headphones }, "list them").preferences);
+  // but going to a results page of another kind, after the search, is a new goal
+  const fresh = forgetStaleGoal(searched, { url: "https://www.amazon.com/s?k=headphones", place: "results", pageKind: "results", products: headphones }, "list them");
+  assert.equal(fresh.preferences, null);
+  assert.deepEqual(fresh.asked, []);
+});
+
 test("only a request for a different kind of item starts a new goal", async () => {
   const { forgetStaleGoal, topicFromText } = await import("./session.js");
   const shoes = { preferences: { category: "women's shoes" }, requirementsTurns: ["women's shoes size 8"], results: [{}], history: [] };

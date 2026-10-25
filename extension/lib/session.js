@@ -194,9 +194,17 @@ export function forgetStaleGoal(session, page, spoken) {
       ? topicFromText(`${page?.title || ""} ${page?.category || ""}`)
       : mainTopic((page?.products || []).map((item) => item.title));
   const pageChanged = session.pageUrl && page?.url && !samePage(session.pageUrl, page.url);
+  // a page of other things only means a new goal once this goal was searched and the shopper
+  // went to a different results or item page themselves. the home page's deals, or the page
+  // they started the questions on, never wipe the answers they're in the middle of giving.
+  // the whole address: a new search on the same site (/s?k=headphones) is a different page
+  const moved = Boolean(session.pageUrl && page?.url && page.url.split("#")[0] !== String(session.pageUrl).split("#")[0]);
+  const pageSwitch =
+    Boolean(session.interviewDone && moved && (page?.place === "results" || page?.place === "listing")) &&
+    Boolean(pageTopic && prefTopic && pageTopic !== prefTopic);
   const conflict =
     (spokenTopic && prefTopic && spokenTopic !== prefTopic) ||
-    (pageTopic && prefTopic && pageTopic !== prefTopic) ||
+    pageSwitch ||
     (spokenTopic && listingTopic && spokenTopic !== listingTopic);
   if (!conflict && !pageChanged) return { ...session, pageUrl: page?.url || session.pageUrl };
   return {

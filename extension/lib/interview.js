@@ -46,6 +46,12 @@ export const SKIP_ASKING = /\b(just search|search now|go ahead and search|start 
 // "doesn't matter", "any": an answer that says there's no preference
 export const NO_PREFERENCE = /^(?:(?:it )?doesn'?t matter|no preference|any(?:thing)?(?: is fine)?|either(?: is fine)?|whatever|i don'?t (?:know|care|mind)|not sure|skip(?: it| that)?|no idea)[.!]*$/i;
 
+// speech-to-text often writes a short reply as words: "Eight.", "eight and a half"
+const NUMBER_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16 };
+export function wordsToDigits(text) {
+  return String(text || "").replace(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen)\b(\s+and a half)?/gi, (_, word, half) => `${NUMBER_WORDS[word.toLowerCase()]}${half ? ".5" : ""}`);
+}
+
 // does a reply fit the question it follows? a size needs a size, a budget an amount. a reply that
 // doesn't fit ("actually I want boots") is a new statement, not the answer.
 const FITS = {
@@ -53,7 +59,21 @@ const FITS = {
   budget: /\d|\$|\b(dollars?|bucks|cheap|no limit|any price|hundred|fifty|twenty|thirty|forty|sixty|seventy|eighty|ninety)\b/i,
 };
 export function answerFits(topic, reply) {
-  return NO_PREFERENCE.test(String(reply || "").trim()) || !FITS[topic] || FITS[topic].test(String(reply || ""));
+  return NO_PREFERENCE.test(String(reply || "").trim()) || !FITS[topic] || FITS[topic].test(wordsToDigits(reply));
+}
+
+// a reply that's only a size ("8", "Eight.", "size 8 wide", "medium"), as a size: "8 wide", "M"
+export function sizeAnswer(reply) {
+  // punctuation goes, but not the point in "8.5"
+  const said = wordsToDigits(reply).toLowerCase().replace(/(?<!\d)[.!?,]+|[.!?,]+(?!\d)/g, " ").replace(/\s+/g, " ").trim();
+  const width = said.match(/\b(wide|narrow)\b|^\d{1,2}(?:\.5)?\s*(w|n)$/)?.slice(1).find(Boolean);
+  const core = said
+    .replace(/^(?:(?:i usually wear|i wear|i'?m|i am|it'?s|usually|a|an|about|size|women'?s|men'?s)\s+)*/, "")
+    .replace(/(?<=\d)\s*(?:w|n)$|\s*\b(?:wide|narrow)$/, "")
+    .trim();
+  const size = normalizeSize(core);
+  if (!size || normalizeSize(core.replace(/^size\s*/, "")) !== size || core.split(" ").length > 3) return "";
+  return width ? `${size} ${/^n/.test(width) ? "narrow" : "wide"}` : size;
 }
 
 const WEARABLE = new Set(["shoe", "top", "bottom", "dress", "outerwear", "hat"]);
@@ -107,7 +127,7 @@ export function sizeKindIn(text) {
 
 // "medium" -> "M", "8 and a half" -> "8.5", so it reads as a size everywhere ("size M", "size 8.5")
 export function normalizeSize(value) {
-  const said = String(value || "").toLowerCase().replace(/^size\s*/, "").trim();
+  const said = wordsToDigits(value).toLowerCase().replace(/[.!?,]+$/, "").replace(/^size\s*/, "").trim();
   const words = { "extra small": "XS", small: "S", medium: "M", large: "L", "extra large": "XL", "x large": "XL", "double extra large": "XXL" };
   if (words[said]) return words[said];
   const half = said.match(/^(\d{1,2})(?:\.5| and a half)$/);
