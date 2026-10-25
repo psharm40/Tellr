@@ -1,0 +1,111 @@
+#tellr-root {
+  all: initial;
+  display: none !important;
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  z-index: 2147483646;
+  transform: translateX(-50%);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  pointer-events: none;
+}
+
+#tellr-root[data-state="listening"],
+#tellr-root[data-state="processing"],
+#tellr-root[data-state="speaking"],
+#tellr-root[data-state="answer"] {
+  display: block !important;
+}
+
+#tellr-bubble {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: min(92vw, 320px);
+  max-width: min(92vw, 560px);
+  padding: 14px 18px;
+  color: #f6f4ef;
+  background: #141414;
+  border: 1px solid #2a2a2a;
+  border-radius: 22px;
+  box-shadow: 0 18px 50px rgb(0 0 0 / 0.35);
+}
+
+#tellr-bars {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  flex: none;
+}
+
+#tellr-bars span {
+  display: block;
+  width: 3px;
+  height: 6px;
+  background: #f6f4ef;
+  border-radius: 99px;
+}
+
+#tellr-root[data-state="listening"] #tellr-bars span,
+#tellr-root[data-state="speaking"] #tellr-bars span {
+  background: #e8a06a;
+  animation: tellr-bar 0.9s ease-in-out infinite;
+}
+
+#tellr-root[data-state="listening"] #tellr-bars span:nth-child(2),
+#tellr-root[data-state="speaking"] #tellr-bars span:nth-child(2) {
+  animation-delay: 0.12s;
+}
+#tellr-root[data-state="listening"] #tellr-bars span:nth-child(3),
+#tellr-root[data-state="speaking"] #tellr-bars span:nth-child(3) {
+  animation-delay: 0.24s;
+}
+#tellr-root[data-state="listening"] #tellr-bars span:nth-child(4),
+#tellr-root[data-state="speaking"] #tellr-bars span:nth-child(4) {
+  animation-delay: 0.08s;
+}
+#tellr-root[data-state="listening"] #tellr-bars span:nth-child(5),
+#tellr-root[data-state="speaking"] #tellr-bars span:nth-child(5) {
+  animation-delay: 0.2s;
+}
+
+#tellr-copy {
+  min-width: 0;
+}
+
+#tellr-label {
+  display: block;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #b7b3aa;
+}
+
+#tellr-text {
+  display: block;
+  margin-top: 2px;
+  font-size: 17px;
+  line-height: 1.35;
+  color: #f6f4ef;
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #tellr-root[data-state="listening"] #tellr-bars span,
+  #tellr-root[data-state="speaking"] #tellr-bars span {
+    animation: none;
+    height: 12px;
+  }
+}
+
+@keyframes tellr-bar {
+  0%,
+  100% {
+    height: 5px;
+  }
+  50% {
+    height: 20px;
+  }
+}

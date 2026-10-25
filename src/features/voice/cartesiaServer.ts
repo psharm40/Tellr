@@ -111,11 +111,27 @@ export function parseSpeakBody(body: unknown): string {
   return trimmed;
 }
 
-// blocks cross-site pages from spending our cartesia quota through these routes.
+// stable id from extension/manifest.json "key". flagged: chrome-extension workstream
+// needs these voice routes; this is a coordinated edit to the voice owner file.
+export const TELLR_EXTENSION_ORIGIN = "chrome-extension://cjmaabcdoilmjgnmihmbcfhchnlhjimg";
+
+function isAllowedExtensionOrigin(origin: string): boolean {
+  if (origin === TELLR_EXTENSION_ORIGIN) return true;
+  // unpacked loads without the manifest key get a random id; still our own extension pages
+  try {
+    return new URL(origin).protocol === "chrome-extension:";
+  } catch {
+    return false;
+  }
+}
+
+// blocks random websites from spending our cartesia quota through these routes.
 // not real auth: anyone can still call the routes directly. fine for a demo, noted in the readme.
+// chrome extension pages send Origin: chrome-extension://… so they need an explicit allow.
 export function assertSameOrigin(request: Request): void {
   const origin = request.headers.get("origin");
   if (!origin) return;
+  if (isAllowedExtensionOrigin(origin)) return;
   const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
   try {
     if (host && new URL(origin).host === host) return;
