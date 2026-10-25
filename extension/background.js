@@ -1,8 +1,17 @@
 // service worker: talks to the tellr backend. keys stay on the server.
-import { ApiError, chooseItems, confirmDemoOrder, describeItems, explainListing, judgeItems, fetchSpeech, inspectListing, parseRequirements, probeTellrBackend, reviewCheckout } from "./lib/api.js";
+import { ApiError, chooseItems, confirmDemoOrder, savedDelete, savedList, savedPut, describeItems, explainListing, judgeItems, fetchSpeech, inspectListing, parseRequirements, probeTellrBackend, reviewCheckout } from "./lib/api.js";
 import {
   speakablePrices,
+  budgetText,
   checkoutAnswer,
+  descriptionPart,
+  itemTotalSpeech,
+  savedLine,
+  shortcutsSpeech,
+  shortlistSpeech,
+  describeRequirement,
+  firstSentence,
+  requirementLabel,
   placeSpeech,
   welcomeSpeech,
   clipForSpeech,
@@ -14,14 +23,16 @@ import {
   inspectionSpeech,
   nextHint,
   preferencesSpeech,
-  spokenName,
+  reminderName,
 } from "./lib/format.js";
 import { listingImagesFromUrls, thumbnailFor } from "./lib/images.js";
-import { MAX_COMPARE, classifyIntent, parseCompareList, parseItemNumber, parseSiteSearch } from "./lib/intent.js";
+import { forServer, mergeSaved, queueOp } from "./lib/saved.js";
+import { NO_PREFERENCE, SIZE_KIND_NAME, SKIP_ASKING, answerFits, answersSoFar, normalizeSize, profileLine, sizeKindIn, sizeStatement, askable, basicQuestion, missingBasics, recapSpeech, topicOf } from "./lib/interview.js";
+import { MAX_COMPARE, classifyIntent, isInspectCommand, parseCompareList, parseItemNumber, parseSavedNumber, parseSiteSearch } from "./lib/intent.js";
 import { keywordsFrom, priceBounds, screenResults, screeningSummary } from "./lib/screen.js";
 import { SITE_NAME, buildSearch, changesSearch, describeSearch, sameSearch as sameSearchAs, searchUrl, siteOf } from "./lib/search.js";
 import { answerFromPage, buildCheckout, buildListing, namedProducts } from "./lib/page.js";
-import { bumpCheckout, createSession, forgetStaleGoal, pushHistory } from "./lib/session.js";
+import { bumpCheckout, createSession, forgetStaleGoal, isItemUrl, itemKey, pushHistory, topicFromText } from "./lib/session.js";
 import { formatHoldKey, getBackendUrl, getSettings } from "./lib/settings.js";
 
 const MAX_REQUIREMENTS = 2000;
@@ -35,7 +46,83 @@ const ready = chrome.storage.session
   .then(({ session: saved }) => {
     if (saved) session = { ...saved, busy: false, notice: null, voice: { status: "idle", transcript: "" } };
   })
+  .then(() => chrome.storage.local.get("profile"))
+  .then((stored) => {
+    if (stored?.profile?.sizes) profile = { sizes: { ...stored.profile.sizes } };
+  })
+  .then(loadSaved)
   .catch(() => {});
+
+// --- the saved list across sessions: chrome first (never lost offline), then convex ---
+// owner: a random id for this chrome profile, kept in chrome's synced storage (no login yet)
+let savedOwner = "";
+// changes that haven't reached the server yet, oldest first
+let savedPending = [];
+const MAX_SAVED = 30;
+
+async function loadSaved() {
+  const synced = await chrome.storage.sync.get("tellrOwner").catch(() => ({}));
+  savedOwner = synced?.tellrOwner || crypto.randomUUID();
+  if (!synced?.tellrOwner) await chrome.storage.sync.set({ tellrOwner: savedOwner }).catch(() => {});
+  const local = await chrome.storage.local.get(["savedItems", "savedPending"]).catch(() => ({}));
+  savedPending = Array.isArray(local?.savedPending) ? local.savedPending : [];
+  if (Array.isArray(local?.savedItems)) session = { ...session, shortlist: local.savedItems };
+  void syncSaved();
+}
+
+function keepSavedLocally() {
+  void chrome.storage.local.set({ savedItems: session.shortlist || [], savedPending }).catch(() => {});
+}
+
+// every change to the list: shown and kept in chrome right away, then sent to the server
+function changeSaved(list, op) {
+  session = { ...session, shortlist: list.slice(-MAX_SAVED) };
+  savedPending = queueOp(savedPending, op.op === "save" ? { op: "save", item: forServer(op.item) } : op);
+  keepSavedLocally();
+  void syncSaved();
+}
+
+// sends waiting changes in order, then takes the server's list (with anything still waiting on
+// top). offline or the server down: the chrome copy stays, and it's tried again next time.
+let syncing = null;
+function syncSaved() {
+  syncing ??= (async () => {
+    try {
+      const backend = await getBackendUrl();
+      while (savedPending.length) {
+        const [next] = savedPending;
+        if (next.op === "save") await savedPut(backend, savedOwner, next.item);
+        else if (next.op === "remove") await savedDelete(backend, savedOwner, next.key);
+        else await savedDelete(backend, savedOwner);
+        savedPending = savedPending.slice(1);
+        keepSavedLocally();
+      }
+      const remote = await savedList(backend, savedOwner);
+      session = { ...session, shortlist: mergeSaved(remote.items || [], savedPending) };
+      keepSavedLocally();
+      broadcast({ type: "session", session });
+    } catch {
+      // stays in chrome; tried again on the next change or when tellr starts
+    } finally {
+      syncing = null;
+    }
+  })();
+  return syncing;
+}
+// the shopper's usual size for each kind of item ({ sizes: { shoe: "8", top: "M" } }), kept in
+// chrome on this computer only, across shopping sessions and after closing tellr
+let profile = { sizes: {} };
+
+function saveSize(kind, size) {
+  if (!kind || !size) return;
+  profile = { sizes: { ...profile.sizes, [kind]: size } };
+  void chrome.storage.local.set({ profile }).catch(() => {});
+}
+
+// the kind of item being shopped for, for its usual size
+function goalKind(extra = "") {
+  return topicFromText(session.preferences?.category || "") || topicFromText(extra);
+}
 let creatingOffscreen = null;
 let talkHold = false;
 // the working tick is playing; when tellr last made a sound (for the "still working" nudge)
@@ -76,9 +163,54 @@ chrome.commands.onCommand.addListener((command, tab) => {
   }
   if (command === "toggle-listening") {
     if (tab?.id != null) holdTabId = tab.id;
+    // starting tellr opens its side panel too. it has to happen right here, inside the key press:
+    // chrome only opens the panel in response to a click or a shortcut, never to speech
+    if (!talkHold && tab?.id != null) void chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
     void enqueue(() => toggleTalk());
   }
+  if (command === "stop-speaking") void ready.then(() => stopSpeaking());
+  if (command === "close-tellr") void ready.then(() => closeKey());
 });
+
+// option+shift + a letter on the page: the same steps as saying it
+async function runPageKey(action, tabId) {
+  if (tabId != null) holdTabId = tabId;
+  if (session.off) return;
+  if (action === "pause") {
+    if (session.paused) await runAction(() => runResume());
+    else await runPause();
+    return;
+  }
+  await runAction(async () => {
+    if (action === "repeat") await runRepeat();
+    else if (action === "help") await runHelp();
+    else if (action === "where") await finishAnswer(placeSpeech(await extractActivePage()), { hint: true });
+    else if (action === "recap") await finishAnswer(recapSpeech(session.preferences, session.asked, describeRequirement, budgetText));
+    else if (action === "more") await runMore();
+    else if (action === "check") await runInspect();
+    else if (action === "back") {
+      if (session.results?.length && session.lastSearch) await runBackToList();
+      else await finishAnswer("There's no list of results to go back to yet. Tell me what you're looking for.");
+    }
+  });
+}
+
+// option+shift+x closes, which forgets the session, so it takes two presses: one stray key
+// never clears everything
+const CLOSE_KEY_WINDOW_MS = 8000;
+let closeKeyAt = 0;
+async function closeKey() {
+  if (session.off) return;
+  if (Date.now() - closeKeyAt < CLOSE_KEY_WINDOW_MS) {
+    closeKeyAt = 0;
+    await runClose();
+    return;
+  }
+  closeKeyAt = Date.now();
+  interruptSpeech();
+  const keys = await shortcutWords();
+  await finishAnswer(`Press ${keys.close} again to close Tellr and clear the page, or say pause to take a break.`);
+}
 
 void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 chrome.runtime.onInstalled.addListener(() => {
@@ -210,6 +342,15 @@ async function handleMessage(message, sender) {
       return {};
     case "open-result":
       await runAction(() => runOpen(Number(message.number)));
+      return {};
+    case "open-saved":
+      await runAction(() => runOpenSaved(`saved ${Number(message.number)}`));
+      return {};
+    case "remove-saved":
+      await runAction(() => runUnsave(`remove saved ${Number(message.number)}`));
+      return {};
+    case "page-key":
+      await runPageKey(message.action, sender?.tab?.id);
       return {};
     case "probe-backend":
       return { found: await probeTellrBackend(message.origin) };
@@ -456,8 +597,18 @@ async function handleTranscript(raw) {
     await runPause();
     return;
   }
-  if (early === "off") {
-    await runOff();
+  if (early === "close") {
+    await runClose();
+    return;
+  }
+  // sounds like stopping: silent right away, then "pause or close?"
+  if (early === "leave") {
+    await runLeaveAsk();
+    return;
+  }
+  // "never mind": stop talking and drop any pending question, keep everything else
+  if (early === "cancel") {
+    await runCancel();
     return;
   }
   // "are you there?" mid-search must not cancel or restart the search
@@ -470,34 +621,106 @@ async function handleTranscript(raw) {
   await runAction(async () => {
     const page = await extractActivePage();
     session = forgetStaleGoal(session, page, text);
+    // which item the shopper is on comes from the tab's address, so a page that is slow to read
+    // never drops them back into the list
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []);
+    const here = page?.url || tab?.url || "";
+    // a cart or checkout page is never "the item": money questions there go to the checkout review
+    const onCheckout = page?.place === "cart" || page?.place === "checkout";
+    const onListing = page ? page.pageKind === "listing" && !onCheckout : isItemUrl(here);
+    focusOn(onListing ? here : "");
     persist();
     // whether a single item's page is open decides where "how's the wear on it?" goes
-    const intent = classifyIntent(text, { ...session, paused: wasPaused, onListing: page?.pageKind === "listing" });
+    const intent = classifyIntent(text, { ...session, paused: wasPaused, onListing, onCheckout });
     setSession({ activity: ACTIVITY[intent.split(":")[0]] || "working on that" });
+    // tellr's last question stays open only while the shopper answers it or checks on tellr;
+    // anything else moves on, so a later sentence isn't taken as its answer
+    if (!["refine", "requirements", "repeat", "help", "where", "recap", "status"].includes(intent)) session = { ...session, awaiting: null };
+    // "clear all your saved items?" lasts one reply too
+    if (!intent.startsWith("clear-saved")) session = { ...session, pendingClearSaved: false };
+    // the save offer lasts one reply; anything else is handled as said, and the offer is dropped
+    if (!intent.startsWith("save-offer")) session = { ...session, pendingSaveOffer: null };
+    // "read more" only continues the description it follows
+    if (!intent.startsWith("read-description")) session = { ...session, descriptionLeft: "" };
+    // the "search for ones that do?" offer only lasts for the next reply
+    if (!intent.startsWith("search-")) session = { ...session, pendingSearch: false };
     // any other answer to "are you done shopping?" means keep going
-    if (!intent.startsWith("end")) session = { ...session, pendingEnd: false };
+    session = { ...session, pendingLeave: false };
     // the listing's seller, popularity, returns... for the side panel
     if (page) session = { ...session, facts: page.facts ?? null };
     if (intent === "resume") await runResume();
-    else if (intent === "end") await runEnd();
-    else if (intent === "end-confirm") await runEndConfirm();
-    else if (intent === "end-cancel") {
-      session = { ...session, pendingEnd: false };
+    else if (intent === "leave-cancel") {
       await finishAnswer("Okay, I'll keep everything.", { hint: true });
     }
     else if (intent === "help") await runHelp();
+    else if (intent === "remember-size") await runRememberSize(text);
+    else if (intent === "what-size") {
+      const known = Object.entries(profile.sizes).map(([kind, size]) => `${SIZE_KIND_NAME[kind] || kind} size ${size}`);
+      await finishAnswer(known.length ? `I remember your ${known.join(", ")}. Say forget my size to clear them.` : "I don't have any of your sizes saved. Say something like: my shoe size is 8.");
+    } else if (intent === "forget-size") {
+      // "forget my shoe size" forgets that one; "forget my sizes" forgets them all
+      const kind = sizeKindIn(text);
+      profile = kind ? { sizes: Object.fromEntries(Object.entries(profile.sizes).filter(([k]) => k !== kind)) } : { sizes: {} };
+      void chrome.storage.local.set({ profile }).catch(() => {});
+      await finishAnswer(kind ? `Okay, I've forgotten your ${SIZE_KIND_NAME[kind]} size.` : "Okay, I've forgotten your sizes.");
+    }
+    else if (intent === "save") await runSave(text);
+    else if (intent === "save-offer-yes" || intent === "save-offer-no") await answerSaveOffer(intent === "save-offer-yes");
+    else if (intent === "clear-saved") {
+      const count = session.shortlist?.length || 0;
+      if (!count) await finishAnswer("Your list is already empty.");
+      else {
+        session = { ...session, pendingClearSaved: true };
+        await finishAnswer(`Clear all ${count} saved item${count === 1 ? "" : "s"}? They'll be gone next time too. Say yes to clear, or no to keep them.`);
+      }
+    } else if (intent === "clear-saved-yes") {
+      changeSaved([], { op: "clear" });
+      await finishAnswer("Your list is cleared.");
+    } else if (intent === "clear-saved-no") await finishAnswer("Okay, I kept your list.");
+    else if (intent === "unsave") await runUnsave(text);
+    else if (intent === "list-saved") await finishAnswer(shortlistSpeech(session.shortlist));
+    else if (intent === "open-saved") await runOpenSaved(text);
+    else if (intent === "compare-saved") await runCompareSaved();
+    else if (intent === "panel") {
+      const keys = await shortcutWords();
+      await finishAnswer(`Press ${keys.panel} to open the side panel. Chrome only opens it from a key press or a click, not from speech.`);
+    } else if (intent === "panel-close") await runClosePanel();
+    else if (intent === "shortcuts") await finishAnswer(shortcutsSpeech(await shortcutWords()));
+    else if (intent === "recap") await finishAnswer(recapSpeech(session.preferences, session.asked, describeRequirement, budgetText));
     else if (intent === "where") await finishAnswer(placeSpeech(page), { hint: true });
     else if (intent === "repeat") await runRepeat();
     else if (intent === "cancel-confirm") await runCancelConfirm();
     else if (intent === "reset") await runReset();
+    else if (intent === "correction") await finishAnswer("Sorry about that. What should I change?");
     else if (intent === "find") await runFind(text, parseSiteSearch(text));
     else if (intent === "list") await runList(page);
     else if (intent === "more") await runMore();
     else if (intent === "buy") await runBuy();
+    else if (intent === "item-requirement") await runItemRequirement(text);
+    else if (intent === "read-title") {
+      const fresh = await extractActivePage();
+      await finishAnswer(fresh?.title ? `The listing's title is: ${fresh.title}.` : "I couldn't read this listing's title.");
+    } else if (intent === "read-description" || intent === "read-description-more") {
+      const first = intent === "read-description";
+      const source = first ? (await extractActivePage())?.sellerDescription || "" : session.descriptionLeft;
+      const { spoken, left } = descriptionPart(source, first);
+      session = { ...session, descriptionLeft: left };
+      await finishAnswer(spoken);
+    } else if (intent === "item-total") {
+      // read fresh: the money comes straight from the page, never from an older snapshot
+      const fresh = await extractActivePage({ fresh: true });
+      await finishAnswer(itemTotalSpeech(fresh?.itemPriceCents ?? 0, fresh?.checkoutHints?.shippingCents ?? null), { hint: true });
+    }
+    else if (intent === "search-confirm") await runSearchForFit();
+    else if (intent === "search-cancel") {
+      session = { ...session, pendingSearch: false };
+      await finishAnswer("Okay, staying on this one. I've still saved what you want.", { hint: true });
+    }
+    else if (intent === "back") await runBackToList();
     else if (intent === "checkout-question") await finishAnswer(checkoutAnswer(text, session.checkout, session.review));
     else if (intent.startsWith("facts:")) {
       const topic = intent.slice(6);
-      await finishAnswer(factsSpeech(page?.facts, topic === "all" ? null : topic, session.preferences));
+      await finishAnswer(factsSpeech(page?.facts, topic === "all" ? null : topic, session.preferences, page?.checkoutHints));
     }
     else if (intent === "choose") await runChoose(text);
     else if (intent === "compare") await runCompare(focusedOr(parseCompareList(text), text));
@@ -508,7 +731,7 @@ async function handleTranscript(raw) {
     // runRequirements adds this to the conversation so far, so earlier answers are never lost
     else if (intent === "refine") await runRequirements(text);
     else if (intent === "unclear") await finishAnswer(`I'm not sure what you meant. ${nextHint(session)} Or say help.`);
-    else if (intent === "inspect") await runInspect(page);
+    else if (intent === "inspect") await (isInspectCommand(text) ? runInspect(page) : runExplain(text.slice(0, MAX_QUESTION)));
     else if (intent === "explain") await runExplain(text.slice(0, MAX_QUESTION));
     else await runRequirements(text);
   }, text);
@@ -580,10 +803,17 @@ async function shortcutWords() {
   const settings = await getSettings();
   const mac = /Mac/i.test(navigator.userAgent);
   const commands = await chrome.commands.getAll().catch(() => []);
-  const toggle = commands.find((c) => c.name === "toggle-listening")?.shortcut;
+  // read from chrome, so a shortcut the shopper changed is the one tellr says
+  const key = (name, fallback) => {
+    const shortcut = commands.find((c) => c.name === name)?.shortcut;
+    return shortcut ? spokenKeys(shortcut) : fallback;
+  };
   return {
     hold: spokenKeys(formatHoldKey(settings.holdKey, mac)),
-    toggle: toggle ? spokenKeys(toggle) : "the Start listening button in the side panel",
+    toggle: key("toggle-listening", "the Start listening button in the side panel"),
+    panel: key("open-tellr", "the Tellr button in the toolbar"),
+    stop: key("stop-speaking", "the Stop speaking button"),
+    close: key("close-tellr", "the close key"),
   };
 }
 
@@ -691,10 +921,51 @@ async function evaluateResults(from, count) {
 }
 
 // one item, the way it's read aloud: price, verdict, what it's like, and why
-function itemLine(item, number) {
+// the full description is read once per item; after that, a few words remind which one it is
+function wasHeard(url) {
+  return Boolean(url) && (session.heard || []).includes(itemKey(url));
+}
+
+function markHeard(urls) {
+  const keys = urls.filter(Boolean).map(itemKey);
+  session = { ...session, heard: [...new Set([...(session.heard || []), ...keys])].slice(-100) };
+}
+
+// the item the shopper is on. a different item starts its own conversation; "" means the list
+function focusOn(url) {
+  const key = url ? itemKey(url) : "";
+  if (key === session.focusKey) return;
+  session = { ...session, focusKey: key, itemTalk: [] };
+}
+
+// "go back": back to the results, and the top picks again in a few words each
+async function runBackToList() {
+  if (await offerSaveBeforeLeaving({ intent: "back", text: "go back" })) return;
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const site = siteOf(tab?.url) || "ebay";
+  if (tab?.id != null && session.lastSearch) {
+    const loaded = waitForTabLoad(tab.id, { navigating: true });
+    await chrome.tabs.update(tab.id, { url: searchUrl(site, session.lastSearch) });
+    await loaded;
+  }
+  focusOn("");
+  session = { ...session, listing: null, report: null, checkout: null, review: null, pendingConfirm: null };
+  await readResults("Back to the list.", "", "");
+}
+
+// in a comparison: a reminder for items already described, the full description the first time
+function compareName(entry) {
+  const item = session.results.find((result) => itemKey(result.url) === itemKey(entry.url)) || { title: entry.title, description: entry.description };
+  return wasHeard(entry.url) || !item.description ? reminderName(item) : item.description.replace(/[.!?\s]+$/, "");
+}
+
+// of: how many there are, so "number 2 of 3" says where the shopper is and how many are left
+function itemLine(item, number, of = 0) {
   const verdict = VERDICT_WORDS[item.verdict];
-  const what = (item.description || item.title).replace(/\s*$/, "").replace(/([^.!?])$/, "$1.");
-  return `Number ${number}, ${formatUsd(item.priceCents)}${verdict ? `, ${verdict}` : ""}: ${what}${item.reason ? ` ${item.reason}` : ""}`;
+  const what = wasHeard(item.url)
+    ? `${reminderName(item).replace(/^./, (c) => c.toUpperCase())}.`
+    : (item.description || item.title).replace(/\s*$/, "").replace(/([^.!?])$/, "$1.");
+  return `Number ${number}${of > 1 ? ` of ${of}` : ""}, ${formatUsd(item.priceCents)}${verdict ? `, ${verdict}` : ""}: ${what}${item.reason ? ` ${item.reason}` : ""}`;
 }
 
 // reads items one at a time, boxing each on the page as it's spoken, then the closing line.
@@ -717,7 +988,8 @@ async function announce(lines, numbers, closing) {
 
 // says the budget summary while the photos are checked, then the best few, best first
 function questionTail(questions) {
-  return questions?.length ? ` One question: ${questions[0]}` : "";
+  const question = nextQuestion(questions);
+  return question ? ` One question: ${question}` : "";
 }
 
 async function readResults(intro, tail = "", opener = "Let me look at the photos and pick the best few.") {
@@ -745,13 +1017,13 @@ async function readResults(intro, tail = "", opener = "Let me look at the photos
     return;
   }
   // tellr's own requirement question (like the size) wins over the comparison question
-  const question = tail.includes("One question:") ? "" : session.followUp ? ` ${session.followUp}` : "";
+  const followUp = tail.includes("One question:") ? "" : nextQuestion([session.followUp]);
+  const question = followUp ? ` ${followUp}` : "";
   const closing = `Say open and a number, or compare them.${question}${tail.replace(" You can also say compare the top 3.", "")}`;
-  await announce(
-    picks.map((item, i) => itemLine(item, i + 1)),
-    picks.map((_, i) => i + 1),
-    closing,
-  );
+  // the top picks: "number 1 of 3"
+  const lines = picks.map((item, i) => itemLine(item, i + 1, picks.length));
+  markHeard(picks.filter((item) => item.description).map((item) => item.url));
+  await announce(lines, picks.map((_, i) => i + 1), closing);
 }
 
 // show on the page what tellr is talking about: number badges on listed items, and a glow
@@ -820,14 +1092,18 @@ async function runMore() {
   const numbers = next.map((_, i) => offset + i + 1);
   session = { ...session, resultsOffset: offset + TOP_PICKS };
   const left = session.results.length - (offset + next.length);
+  // further results: their place among everything found, "number 4 of 8"
+  const lines = next.map((item, i) => itemLine(item, numbers[i], session.results.length));
+  markHeard(next.filter((item) => item.description).map((item) => item.url));
   await announce(
-    next.map((item, i) => itemLine(item, numbers[i])),
+    lines,
     numbers,
     left > 0 ? "Say more for others, or open a number." : "That's all I can read here. Say open and a number to pick one.",
   );
 }
 
 async function runOpen(number) {
+  if (await offerSaveBeforeLeaving({ intent: "open", text: `open number ${number}` })) return;
   if (!session.results?.length) {
     const page = await extractActivePage();
     session = { ...session, results: toResults(namedProducts(page?.products || [], page?.title)), resultsOffset: 0 };
@@ -847,6 +1123,7 @@ async function runOpen(number) {
     return;
   }
   await chrome.tabs.update(tab.id, { url: item.url });
+  focusOn(item.url);
   // already inspected during a comparison: reuse it so the shopper can ask questions right away
   const checked = (session.comparisons || []).find((entry) => entry.url === item.url);
   session = {
@@ -860,8 +1137,8 @@ async function runOpen(number) {
   };
   await finishAnswer(
     checked
-      ? `Opening number ${number}, ${spokenName(item)}, ${formatUsd(item.priceCents)}. I already checked its photos. Ask me anything about it, like how worn it is, or go to checkout and say review checkout.`
-      : `Opening number ${number}, ${spokenName(item)}, ${formatUsd(item.priceCents)}. When it loads, ask me how it looks or how worn it is, or say check this item.`,
+      ? `Opening number ${number}, ${reminderName(item)}, ${formatUsd(item.priceCents)}. I already checked its photos. Ask me anything about it, like how worn it is, or go to checkout and say review checkout.`
+      : `Opening number ${number}, ${reminderName(item)}, ${formatUsd(item.priceCents)}. When it loads, ask me how it looks or how worn it is, or say check this item.`,
   );
 }
 
@@ -924,7 +1201,7 @@ async function runSearch(search, { site: wanted = null, questions = [] } = {}) {
     focusNumbers: [],
   };
   // a question tellr still has (like the size) comes after the results
-  const ask = questions.length ? ` One question: ${questions[0]}` : "";
+  const ask = questionTail(questions);
   const results = toResults(namedProducts(page?.products || [], page?.title));
   if (!results.length) {
     session = { ...session, results: [], resultsOffset: 0 };
@@ -1075,6 +1352,186 @@ async function runCompare(numbers) {
     );
     return;
   }
+  await compareItems(picks);
+}
+
+// --- the shortlist: items saved to come back to, across searches ---
+
+// what's known about an item, for its line on the list: the photo check's flaw and unknown when
+// it was checked, else the quick judgement from the results
+function savedEntry(item, report) {
+  const assessments = report?.assessments || [];
+  const flaw = assessments.find((a) => a.status === "contradicted");
+  const unknown = assessments.find((a) => a.status === "unknown");
+  return {
+    key: itemKey(item.url),
+    url: item.url,
+    title: item.title || "Untitled item",
+    description: item.description || "",
+    priceCents: item.priceCents || 0,
+    fit: item.verdict || "",
+    flaw: flaw ? firstSentence(flaw.explanation) : ["risky", "not_a_match"].includes(item.verdict) && item.reason ? item.reason : "",
+    unknown: unknown ? firstSentence(unknown.explanation) : "",
+    kind: topicFromText(`${item.title || ""} ${session.preferences?.category || ""}`) || "",
+    savedAt: Date.now(),
+  };
+}
+
+// a closer look at a saved item updates its line
+function refreshSaved(url, report) {
+  const key = itemKey(url);
+  if (!report || !(session.shortlist || []).some((entry) => entry.key === key)) return;
+  let updated = null;
+  const list = session.shortlist.map((entry) => {
+    if (entry.key !== key) return entry;
+    const fresh = savedEntry({ ...entry, verdict: entry.fit }, report);
+    updated = { ...entry, flaw: fresh.flaw || entry.flaw, unknown: fresh.unknown };
+    return updated;
+  });
+  if (updated) changeSaved(list, { op: "save", item: updated });
+}
+
+// leaving an item ("go back", "open number 3"): offer once to save it first. returns true when
+// it asked, so the leaving waits for the yes or no. not offered for items already saved, or
+// twice for the same item.
+async function offerSaveBeforeLeaving(then) {
+  const key = session.focusKey;
+  if (!key || session.pendingSaveOffer) return false;
+  if ((session.shortlist || []).some((entry) => entry.key === key) || (session.saveOffered || []).includes(key)) return false;
+  let item = session.results.find((result) => itemKey(result.url) === key) || null;
+  if (!item) {
+    const page = await extractActivePage();
+    if (page?.url && itemKey(page.url) === key) item = { url: page.url, title: page.title, priceCents: page.itemPriceCents };
+  }
+  if (!item?.url) return false;
+  const checked = session.report || (session.comparisons || []).find((entry) => itemKey(entry.url) === key)?.report || null;
+  session = {
+    ...session,
+    saveOffered: [...(session.saveOffered || []), key].slice(-50),
+    pendingSaveOffer: { entry: savedEntry(item, checked), then },
+  };
+  await finishAnswer("Before you go, want me to save this one to your list?");
+  return true;
+}
+
+// the answer to the save offer, then what the shopper was doing
+async function answerSaveOffer(yes) {
+  const offer = session.pendingSaveOffer;
+  session = { ...session, pendingSaveOffer: null };
+  if (!offer) return;
+  if (yes) {
+    changeSaved([...(session.shortlist || []), offer.entry], { op: "save", item: offer.entry });
+    await speak(`Saved ${reminderName(offer.entry)}.`);
+  }
+  const { intent, text } = offer.then;
+  if (intent === "back") await runBackToList();
+  else if (intent === "open") await runOpen(parseItemNumber(text));
+  else if (intent === "open-saved") await runOpenSaved(text);
+}
+
+// "save this one" on an item, "save number 2" while hearing results
+async function runSave(said) {
+  const number = parseItemNumber(said);
+  let item = null;
+  let report = null;
+  if (number != null) {
+    item = session.results?.[number - 1] || null;
+  } else if (session.focusKey) {
+    item = session.results.find((result) => itemKey(result.url) === session.focusKey) || null;
+    if (!item) {
+      const page = await extractActivePage();
+      if (page) item = { url: page.url, title: page.title, priceCents: page.itemPriceCents };
+    }
+    report = session.report;
+  } else if (session.focusNumbers?.length === 1) {
+    item = session.results[session.focusNumbers[0] - 1] || null;
+  }
+  if (!item?.url) {
+    await finishAnswer("Which one? Say save number 2 while I'm reading results, or open an item and say save this one.");
+    return;
+  }
+  const checked = report || (session.comparisons || []).find((entry) => itemKey(entry.url) === itemKey(item.url))?.report || null;
+  const entry = savedEntry(item, checked);
+  const list = session.shortlist || [];
+  const at = list.findIndex((saved) => saved.key === entry.key);
+  if (at >= 0) {
+    const updated = { ...list[at], ...entry, savedAt: list[at].savedAt };
+    changeSaved(list.map((saved, i) => (i === at ? updated : saved)), { op: "save", item: updated });
+    await finishAnswer(`That one's already saved, as saved ${at + 1}.`, { hint: true });
+    return;
+  }
+  changeSaved([...list, entry], { op: "save", item: entry });
+  await finishAnswer(`Saved ${reminderName(entry)}. You have ${session.shortlist.length} saved. Say what's on my list to hear them.`);
+}
+
+// "remove saved 2", "take this one off my list"
+async function runUnsave(said) {
+  const list = session.shortlist || [];
+  const number = parseSavedNumber(said) ?? parseItemNumber(said);
+  let at = number != null ? number - 1 : -1;
+  if (number == null && session.focusKey) at = list.findIndex((entry) => entry.key === session.focusKey);
+  if (at < 0 || !list[at]) {
+    await finishAnswer(list.length ? `Which one? Say remove saved 1, up to saved ${list.length}.` : "Your list is empty.");
+    return;
+  }
+  const removed = list[at];
+  changeSaved(list.filter((_, i) => i !== at), { op: "remove", key: removed.key });
+  await finishAnswer(`Removed ${reminderName(removed)}. You have ${session.shortlist.length} saved.`);
+}
+
+// "open saved 2": its page, wherever it came from
+async function runOpenSaved(said) {
+  if (await offerSaveBeforeLeaving({ intent: "open-saved", text: said })) return;
+  const list = session.shortlist || [];
+  const number = parseSavedNumber(said) ?? parseItemNumber(said);
+  const entry = number != null ? list[number - 1] : null;
+  if (!entry) {
+    await finishAnswer(list.length ? `Which one? Say open saved 1, up to saved ${list.length}.` : "Your list is empty.");
+    return;
+  }
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (tab?.id != null && tab.url !== entry.url) await chrome.tabs.update(tab.id, { url: entry.url });
+  focusOn(entry.url);
+  const checked = (session.comparisons || []).find((c) => itemKey(c.url) === entry.key);
+  session = { ...session, pageUrl: entry.url, listing: checked?.listing ?? null, report: checked?.report ?? null, checkout: null, review: null, pendingConfirm: null };
+  await finishAnswer(`Opening ${savedLine(entry, number).replace(/^Saved/, "saved")}`, { hint: true });
+}
+
+// "compare my saved ones": the first three on the list, side by side
+async function runCompareSaved() {
+  const list = session.shortlist || [];
+  if (list.length < 2) {
+    await finishAnswer(list.length ? "You have one saved. Save another to compare them." : "Your list is empty. Save a few first, then compare them.");
+    return;
+  }
+  if (!session.preferences) {
+    await finishAnswer("Tell me what you want first, so I know what to check them against.");
+    return;
+  }
+  const picks = list.slice(0, MAX_COMPARE).map((entry, i) => ({ number: i + 1, item: entry }));
+  if (list.length > MAX_COMPARE) await speak(`You have ${list.length} saved. I'll compare the first ${MAX_COMPARE}.`);
+  await compareItems(picks, { saved: true });
+}
+
+// "close the panel": chrome 141+ allows closing without a key press
+async function runClosePanel() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (chrome.sidePanel.close && tab?.windowId != null) {
+      await chrome.sidePanel.close({ windowId: tab.windowId });
+      await finishAnswer("Closed the side panel.");
+      return;
+    }
+  } catch {
+    // not open, or not supported
+  }
+  await finishAnswer("I can't close it from here in this version of Chrome. Use the close button at the top of the panel.");
+}
+
+// checks the picked items side by side and ranks them. saved: they come from the shortlist, so
+// they're named "saved 2" and nothing is boxed on the page (they may be from another search)
+async function compareItems(picks, { saved = false } = {}) {
+  const label = (n) => (saved ? `saved ${n}` : `number ${n}`);
   // the shopper hears something while the photos are checked
   await speak(`Checking ${picks.length} items side by side. This takes up to a minute.`);
   const backendUrl = await getBackendUrl();
@@ -1090,11 +1547,12 @@ async function runCompare(numbers) {
     }
   });
   session = { ...session, comparisons: checked.map(({ number, url, listing, report }) => ({ number, url, listing, report })) };
+  for (const entry of checked) refreshSaved(entry.url, entry.report);
   if (!checked.length) {
-    await finishAnswer(`I couldn't check those items. ${failed.map((f) => `Number ${f.number}: ${f.reason}.`).join(" ")}`);
+    await finishAnswer(`I couldn't check those items. ${failed.map((f) => `${label(f.number)}: ${f.reason}.`).join(" ")}`);
     return;
   }
-  const missed = failed.map((f) => `I couldn't check number ${f.number}: ${f.reason}.`).join(" ");
+  const missed = failed.map((f) => `I couldn't check ${label(f.number)}: ${f.reason}.`).join(" ");
   // a fair, human ranking for the price; the mechanical summary is only a fallback
   try {
     const judged = await judgeItems(backendUrl, {
@@ -1104,16 +1562,18 @@ async function runCompare(numbers) {
     });
     const byNumber = new Map(checked.map((entry) => [entry.number, entry]));
     const order = judged.ranking.map((r) => r.number);
-    session = { ...session, focusNumbers: order };
+    if (!saved) session = { ...session, focusNumbers: order };
     const lines = judged.ranking.map(
       (r, i) =>
-        `${i === 0 ? "Best" : "Next"}: number ${r.number}, ${formatUsd(byNumber.get(r.number).priceCents)}, ${VERDICT_WORDS[r.verdict]}. ${r.summary}`,
+        `${i === 0 ? "Best" : "Next"}: ${label(r.number)}, ${compareName(byNumber.get(r.number))}, ${formatUsd(byNumber.get(r.number).priceCents)}, ${VERDICT_WORDS[r.verdict]}. ${r.summary}`,
     );
-    const closing = [missed, `Say open number ${order[0]} to go to it.`, judged.followUp].filter(Boolean).join(" ");
-    await announce(lines, order, closing);
+    markHeard(checked.map((entry) => entry.url));
+    const closing = [missed, `Say open ${label(order[0])} to go to it.`, nextQuestion([judged.followUp])].filter(Boolean).join(" ");
+    // saved items may not be on this page, so there's nothing to box while reading them
+    await announce(lines, saved ? order.map(() => null) : order, closing);
   } catch {
     const best = [...checked].sort((a, b) => fitScore(b.report) - fitScore(a.report) || a.priceCents - b.priceCents)[0];
-    if (best) glowResults([best.number]);
+    if (best && !saved) glowResults([best.number]);
     await finishAnswer(compareSpeech(checked, failed, session.preferences.requirements));
   }
 }
@@ -1124,9 +1584,24 @@ const MAX_CONVERSATION_CHARS = 1900;
 // everything the shopper has said about the current goal, so claude never forgets an earlier
 // answer (budget, size) when asking its next question. a new goal ("start over", or a different
 // kind of item, which clears the preferences) starts a fresh conversation.
-function conversationWith(next) {
-  const turns = session.preferences ? [...(session.requirementsTurns || []), next] : [next];
-  const render = (list) => list.map((turn, i) => (i === 0 ? turn : `Then the shopper said: ${turn}`)).join("\n");
+// the shopper's usual size for this kind of item, when nothing in the conversation says a size
+function usualSizeLine(conversation, next = "") {
+  const kind = goalKind(next);
+  const size = kind ? profile.sizes[kind] : "";
+  // only when the conversation itself doesn't already give a size
+  if (!size || keywordsFrom(conversation, null).some((word) => /^size /.test(word.label))) return "";
+  return profileLine(kind, size);
+}
+
+// what the shopper said, with tellr's question in front of an answer ("Tellr asked: what size?
+// The shopper answered: size 8") so short answers keep their meaning, and every answer so far
+// on top, so trimming an old turn never loses one
+function conversationWith(next, answered = null) {
+  const turn = answered ? `Tellr asked: ${answered.question} The shopper answered: ${answered.answer}` : next;
+  const turns = session.preferences ? [...(session.requirementsTurns || []), turn] : [turn];
+  const summary = [answersSoFar(session.asked), usualSizeLine([...turns].join(" "), next)].filter(Boolean).join("\n");
+  const render = (list) =>
+    [summary, ...list.map((t, i) => (i === 0 || t.startsWith("Tellr asked:") ? t : `Then the shopper said: ${t}`))].filter(Boolean).join("\n");
   // keep the first request and as many of the latest answers as fit
   let kept = turns;
   while (kept.length > 2 && render(kept).length > MAX_CONVERSATION_CHARS) kept = [kept[0], ...kept.slice(2)];
@@ -1134,8 +1609,60 @@ function conversationWith(next) {
   return { turns: kept, text: text.length > MAX_CONVERSATION_CHARS ? text.slice(-MAX_CONVERSATION_CHARS) : text };
 }
 
-async function runRequirements(said) {
-  const conversation = conversationWith(said);
+// the question tellr is about to ask: kept, so its answer is understood and it's never repeated
+function noteQuestion(question) {
+  if (!question) return;
+  const entry = { topic: topicOf(question), question, answer: null };
+  session = { ...session, asked: [...(session.asked || []), entry].slice(-20), awaiting: { topic: entry.topic, question } };
+}
+
+// the first follow-up worth asking from a list, skipping any topic already asked; noted as asked
+function nextQuestion(questions) {
+  const [question] = askable(session.asked, questions);
+  noteQuestion(question);
+  return question || "";
+}
+
+// what the shopper just said, kept as the answer to tellr's last question
+function recordAnswer(said) {
+  const waiting = session.awaiting;
+  if (!waiting) return null;
+  // not an answer to that question: a new statement. the question stays open so it can be
+  // repeated once ("and what's the most you'd like to spend?"); after that it's dropped
+  if (!answerFits(waiting.topic, said)) {
+    session = { ...session, awaiting: waiting.repeated ? null : { ...waiting, unanswered: true } };
+    return null;
+  }
+  let answer = said.trim().slice(0, 200);
+  if (NO_PREFERENCE.test(answer)) answer = "no preference";
+  // "8" to "what size?" is a size, so the search and the screening read it as one
+  else if (waiting.topic === "size" && /^\d{1,2}(?:\.5)?(?:\s*(?:wide|w|narrow|n))?[.!]*$/i.test(answer)) answer = `size ${answer.replace(/[.!]+$/, "")}`;
+  const asked = [...(session.asked || [])];
+  for (let i = asked.length - 1; i >= 0; i -= 1) {
+    if (asked[i].question === waiting.question && !asked[i].answer) {
+      asked[i] = { ...asked[i], answer };
+      break;
+    }
+  }
+  session = { ...session, asked, awaiting: null };
+  // a size answered once is remembered for this kind of item, for next time
+  let remembered = "";
+  if (waiting.topic === "size" && answer !== "no preference") {
+    const kind = goalKind();
+    const size = normalizeSize(answer);
+    if (kind && size) {
+      saveSize(kind, size);
+      remembered = ` I'll remember your ${SIZE_KIND_NAME[kind] || kind} size for next time.`;
+    }
+  }
+  return { question: waiting.question, answer, remembered };
+}
+
+// adds what the shopper just said to what tellr knows about the goal. keepItem: they're on an
+// item's page, so its photo check stays (it's checked against the new requirement next)
+async function saveRequirements(said, { keepItem = false } = {}) {
+  const answered = recordAnswer(said);
+  const conversation = conversationWith(said, answered);
   const data = await parseRequirements(await getBackendUrl(), conversation.text);
   session = {
     ...session,
@@ -1143,10 +1670,130 @@ async function runRequirements(said) {
     clarificationQuestions: data.clarificationQuestions ?? [],
     requirementsTurns: conversation.turns,
     requirementsText: conversation.text,
-    report: null,
-    review: null,
-    demoOrderId: null,
+    ...(keepItem ? {} : { report: null, review: null, demoOrderId: null }),
   };
+  // the kind of item is only known after this first parse: use the usual size now if it isn't
+  // already in, and say so once per goal ("I'll use your usual shoe size, 8")
+  const usual = usualSizeLine(session.requirementsText);
+  if (usual && !session.requirementsText.includes(usual)) session = { ...session, requirementsText: `${usual}\n${session.requirementsText}` };
+  const kind = goalKind();
+  if (kind && profile.sizes[kind] && session.requirementsText.includes(profileLine(kind, profile.sizes[kind])) && session.sizeNoted !== kind) {
+    session = { ...session, sizeNoted: kind, sizeNote: `I'll use your usual ${SIZE_KIND_NAME[kind] || kind} size, ${profile.sizes[kind]}.` };
+  }
+  return { data, answered };
+}
+
+// on an item's page, a new requirement ("they need to be leather"): it's saved, then this item is
+// checked against it with its details and photos. fits: stay. doesn't: say why and offer to
+// search for ones that do (never leaving without asking). can't tell: stay and say so.
+async function runItemRequirement(said) {
+  const before = session.preferences;
+  await saveRequirements(said, { keepItem: true });
+  const prefs = session.preferences;
+  const same = (a, b) => a.attribute === b.attribute && a.operator === b.operator && JSON.stringify(a.value) === JSON.stringify(b.value);
+  const added = (prefs?.requirements || []).filter((req) => !(before?.requirements || []).some((old) => same(old, req)));
+  const page = await extractActivePage({ fresh: true });
+  const priceCents = session.listing?.itemPriceCents || page?.itemPriceCents || 0;
+  // a budget is plain arithmetic on the item's price, never a judgement
+  const overBudget = prefs?.maxTotalCents != null && prefs.maxTotalCents !== before?.maxTotalCents && priceCents > prefs.maxTotalCents;
+  if (!added.length && !overBudget) {
+    if (prefs?.maxTotalCents != null && prefs.maxTotalCents !== before?.maxTotalCents && priceCents) {
+      await finishAnswer(`Saved. This one is ${formatUsd(priceCents)}, within your ${formatUsd(prefs.maxTotalCents)} budget.`, { hint: true });
+      return;
+    }
+    // nothing new to check against (like "for work"): answer about this item with it in mind
+    await runExplain(said.slice(0, MAX_QUESTION));
+    return;
+  }
+  let findings = [];
+  if (added.length) {
+    // the photo check, again, with the new requirement: one status per requirement
+    if (!(await runInspect(page || undefined, { readOut: false }))) return;
+    findings = added.map((req) => ({ req, assessment: (session.report?.assessments || []).find((a) => a.requirementId === req.id) }));
+  }
+  const misses = findings.filter((f) => f.assessment?.status === "contradicted");
+  const unknown = findings.filter((f) => !f.assessment || f.assessment.status === "unknown");
+  const why = (list) => list.map((f) => (f.assessment ? firstSentence(f.assessment.explanation) : `I couldn't check ${requirementLabel(f.req)}.`)).join(" ");
+  if (overBudget || misses.length) {
+    const reasons = [overBudget ? `It's ${formatUsd(priceCents)}, over your ${formatUsd(prefs.maxTotalCents)} budget.` : "", why(misses)].filter(Boolean).join(" ");
+    session = { ...session, pendingSearch: true };
+    await finishAnswer(`Saved. This one doesn't fit: ${reasons} Want me to go back and search for ones that do?`);
+    return;
+  }
+  if (unknown.length) {
+    await finishAnswer(
+      `Saved. I can't tell from this listing: ${why(unknown)} It's worth asking the seller. Say go back to search for ones that list it.`,
+    );
+    return;
+  }
+  const claimed = findings.some((f) => f.assessment?.status === "seller_claimed");
+  await finishAnswer(`Saved. This one fits${claimed ? ", going by what the seller says" : ""}: ${why(findings)}`, { hint: true });
+}
+
+// "yes, search for ones that do": back to the results with the updated search
+async function runSearchForFit() {
+  session = { ...session, pendingSearch: false };
+  const search = buildSearch(session.preferences, session.requirementsText);
+  if (!search) {
+    await finishAnswer("Tell me what kind of item to search for.");
+    return;
+  }
+  focusOn("");
+  session = { ...session, listing: null, report: null, checkout: null, review: null };
+  await runSearch(search);
+}
+
+// "I'll use your usual shoe size, 8", said once, the first time it's used for a goal
+function takeSizeNote() {
+  const note = session.sizeNote || "";
+  if (note) session = { ...session, sizeNote: "" };
+  return note;
+}
+
+// "my shoe size is 8": remembered for next time, and used now if that's what's being shopped for
+async function runRememberSize(said) {
+  const stated = sizeStatement(said);
+  const kind = stated?.kind || goalKind(said);
+  if (!stated?.size || !kind) {
+    await finishAnswer("Which kind of item is that size for? Say it like: my shoe size is 8, or my top size is medium.");
+    return;
+  }
+  saveSize(kind, stated.size);
+  const note = `Got it. I'll remember your ${SIZE_KIND_NAME[kind] || kind} size is ${stated.size}.`;
+  if (session.preferences && goalKind() === kind) {
+    await speak(note);
+    await (session.focusKey ? runItemRequirement(said) : runRequirements(said));
+    return;
+  }
+  await finishAnswer(note);
+}
+
+async function runRequirements(said) {
+  const { data, answered } = await saveRequirements(said);
+  // before the first search, learn the basics one question at a time: the kind of item, the
+  // size for things you wear, the budget, the style or use. "just search" skips the rest.
+  if (!session.interviewDone && !SKIP_ASKING.test(said)) {
+    // a question the shopper talked past gets asked once more, before any new one
+    const open = session.awaiting?.unanswered ? session.awaiting : null;
+    if (open) {
+      session = { ...session, awaiting: { topic: open.topic, question: open.question, repeated: true } };
+      await finishAnswer(`Got it. And ${open.question.charAt(0).toLowerCase()}${open.question.slice(1)}`);
+      return;
+    }
+    const [topic] = missingBasics(session.preferences, session.requirementsText, session.asked);
+    if (topic) {
+      const question = (data.clarificationQuestions || []).find((q) => topicOf(q) === topic) || basicQuestion(topic, session.preferences);
+      noteQuestion(question);
+      const category = String(session.preferences?.category || "");
+      const ack = answered ? `Got it: ${answered.answer}.${answered.remembered || ""}` : category && !/^(item|items|something|anything)$/i.test(category) ? `Got it, ${category}.` : "";
+      const note = takeSizeNote();
+      await finishAnswer(`${ack} ${note} ${question}`.replace(/\s+/g, " ").trim());
+      return;
+    }
+  }
+  session = { ...session, interviewDone: true };
+  const sizeNote = takeSizeNote();
+  if (sizeNote) await speak(sizeNote);
   // with a real item type, go straight to a search and read back what's there
   const search = buildSearch(session.preferences, session.requirementsText);
   if (search) {
@@ -1160,13 +1807,15 @@ async function runRequirements(said) {
         results: session.results.map((item) => ({ ...item, verdict: undefined, reason: undefined })),
         resultsOffset: 0,
       };
-      await readResults("Got it. Let me re-check these with that in mind.", questionTail(data.clarificationQuestions), "");
+      const heard = answered ? `Got it: ${answered.answer}.` : "Got it.";
+      await readResults(`${heard} Let me re-check these with that in mind.`, questionTail(data.clarificationQuestions), "");
       return;
     }
     await runSearch(search, { questions: data.clarificationQuestions ?? [] });
     return;
   }
-  const spoken = preferencesSpeech(data.preferences, data.clarificationQuestions ?? []);
+  const spoken = preferencesSpeech(data.preferences, askable(session.asked, data.clarificationQuestions ?? []).slice(0, 1));
+  nextQuestion(data.clarificationQuestions ?? []);
   // on a results page, narrowing the requirements re-screens what's there right away
   const page = await extractActivePage();
   if (page?.pageKind === "results") {
@@ -1185,8 +1834,8 @@ async function runRequirements(said) {
 }
 
 async function runReset() {
-  // a new goal, not a new visit: no second welcome
-  session = { ...createSession(), voice: session.voice, oriented: session.oriented };
+  // a new goal, not a new visit: no second welcome, and the shortlist stays
+  session = { ...createSession(), voice: session.voice, oriented: session.oriented, shortlist: session.shortlist };
   persist();
   broadcast({ type: "session", session: publicSession(session) });
   await clearPageMarks();
@@ -1202,13 +1851,27 @@ async function runPause() {
   setSession({
     paused: true,
     missedWhilePaused: false,
-    pendingEnd: false,
+    pendingLeave: false,
     busy: false,
     notice: null,
     lastAnswer: line,
     voice: { status: "idle", transcript: session.voice.transcript },
   });
+  void sendOffscreen({ type: "offscreen-tone", name: "paused" }).catch(() => {});
   await speak(line, { evenIfPaused: true });
+}
+
+async function runCancel() {
+  interruptSpeech();
+  clearProcessWatchdog();
+  const line = "Okay, cancelled. I still have everything we found.";
+  setSession({
+    pendingConfirm: null,
+    pendingLeave: false,
+    lastAnswer: line,
+    voice: { status: session.busy ? "processing" : "idle", transcript: session.voice.transcript },
+  });
+  await speak(line);
 }
 
 async function runStatus() {
@@ -1232,17 +1895,14 @@ async function welcome() {
   session = pushHistory({ ...session, lastAnswer: text, lastSpoken: text }, "assistant", text);
   persist();
   broadcast({ type: "session", session });
-  const gen = speechGen;
-  const played = await speakAndWait(text);
-  // pressing the key again or saying stop skips the rest; without speech, don't open the mic
-  if (!played || gen !== speechGen) return;
-  holdMode = "toggle";
-  void enqueue(() => startTalk());
+  // it ends with a question, so when it finishes the chime plays and the mic opens by itself.
+  // pressing the key or saying stop skips it; without speech, the mic stays closed.
+  await speakAndWait(text);
 }
 
-// "shut up and close": silent, mic off, page marks gone, panel closed. memory stays, so turning
-// it back on picks up where you left off; only "i'm done shopping" clears it.
-async function runOff() {
+// "close": finished. silent, mic off, every box and number gone from every page, the side panel
+// closed, and this shopping session forgotten. "pause" is the way to stop and come back later.
+async function runClose() {
   // silence, the off tone, and a clean page first, before anything that waits
   interruptSpeech();
   session = { ...session, off: true };
@@ -1252,8 +1912,11 @@ async function runOff() {
   const keys = await shortcutWords();
   // the panel closes, so name a key, not its button
   const toggle = /button/.test(keys.toggle) ? "" : `, or press ${keys.toggle}`;
-  const line = `Tellr is off. To turn me back on, hold ${keys.hold}${toggle}.`;
-  setSession({ off: true, paused: false, oriented: false, pendingEnd: false, lastAnswer: line });
+  const line = `Tellr is closed. Thanks for shopping. To start again, hold ${keys.hold}${toggle}.`;
+  // the saved list stays: it's kept for next time, in chrome and convex
+  session = { ...createSession(), voice: session.voice, off: true, oriented: false, lastAnswer: line, shortlist: session.shortlist };
+  persist();
+  broadcast({ type: "session", session: publicSession(session) });
   await speak(line, { evenIfPaused: true });
   // anything that slipped through while turning off
   setTimeout(() => {
@@ -1268,6 +1931,15 @@ async function runOff() {
   }
 }
 
+// "stop", "I'm done", "I don't need you anymore": quiet at once, then one question with two
+// clear answers, so a stray word never ends the session by itself
+async function runLeaveAsk() {
+  interruptSpeech();
+  clearProcessWatchdog();
+  session = { ...session, pendingLeave: true, busy: false };
+  await finishAnswer("Say pause to come back to this later, or close to finish and clear the page. Which one?");
+}
+
 async function runResume() {
   const missed = session.missedWhilePaused && session.lastSpoken;
   session = { ...session, missedWhilePaused: false };
@@ -1277,28 +1949,6 @@ async function runResume() {
   }
   const goal = session.preferences?.category ? `We were shopping for ${session.preferences.category}. ` : "";
   await finishAnswer(`Welcome back. ${goal}`, { hint: true });
-}
-
-// clearing can't be undone, so check first; a quick "pause" is offered as the other way out
-async function runEnd() {
-  const nothingSaved = !session.preferences && !session.results?.length && !session.listing;
-  if (nothingSaved) {
-    await runEndConfirm();
-    return;
-  }
-  session = { ...session, pendingEnd: true };
-  await finishAnswer(
-    "Are you done shopping for today? Say yes and I'll clear everything we found. Say no to keep going, or pause if you just need a break.",
-  );
-}
-
-async function runEndConfirm() {
-  // a new goal, not a new visit: no second welcome
-  session = { ...createSession(), voice: session.voice, oriented: session.oriented };
-  persist();
-  broadcast({ type: "session", session: publicSession(session) });
-  await clearPageMarks();
-  await finishAnswer("All cleared. Thanks for shopping with Tellr. Whenever you want to shop again, just tell me what you're looking for.");
 }
 
 async function runPageQuestion(text, knownPage) {
@@ -1311,7 +1961,9 @@ async function runPageQuestion(text, knownPage) {
   await finishAnswer(answerFromPage(text, page));
 }
 
-async function runInspect(knownPage) {
+// readOut false: check the photos and keep the report, without reading it all out. used when
+// the shopper asked a question, which is then answered instead. returns true when checked.
+async function runInspect(knownPage, { readOut = true } = {}) {
   if (!session.preferences) {
     await finishAnswer("Tell me what you want to buy on this page. For example: running shoes under one hundred dollars.");
     return;
@@ -1342,7 +1994,7 @@ async function runInspect(knownPage) {
   // a close photo check takes up to a minute; silence would sound like it broke
   const total = (page.imageUrls || []).length;
   const which = images.length === 1 ? "the photo" : total > images.length ? `the first ${images.length} of ${total} photos` : `all ${images.length} photos`;
-  await speak(`Looking closely at ${which}. This takes up to a minute.`);
+  await speak(readOut ? `Looking closely at ${which}. This takes up to a minute.` : `Let me look at ${which} and the listing details. This takes up to a minute.`);
   const report = await inspectListing(await getBackendUrl(), listing, session.preferences);
   session = bumpCheckout(
     {
@@ -1355,25 +2007,40 @@ async function runInspect(knownPage) {
     },
     buildCheckout(page, listing.id, listing.title, listing.itemPriceCents),
   );
-  await finishAnswer(inspectionSpeech(report), { hint: true });
+  // already described in the list: a reminder, then only what the closer look found
+  const known = wasHeard(page.url) ? session.results.find((item) => itemKey(item.url) === itemKey(page.url)) : null;
+  const reminder = known ? reminderName(known) : wasHeard(page.url) ? reminderName({ title: listing.title }) : "";
+  markHeard([page.url]);
+  refreshSaved(page.url, report);
+  if (!readOut) return true;
+  await finishAnswer(inspectionSpeech(report, { reminder }), { hint: true });
+  return true;
 }
 
 async function runExplain(question) {
-  if (!session.report || !session.preferences) {
+  if (!session.preferences) {
     await runInspect();
     return;
   }
+  // not checked yet: check the photos quietly, then answer the question itself
+  if (!session.report && !(await runInspect(undefined, { readOut: false }))) return;
   void showOnPage({ type: "highlight", page: true });
   const listing = session.listing
     ? { title: session.listing.title, itemPriceCents: session.listing.itemPriceCents, currency: "USD" }
     : undefined;
+  // only what was said about this item: the list readings would pull other options into the answer
+  // the item specifics on the page, so the answer uses them together with the photos
+  const page = await extractActivePage();
   const answer = await explainListing(await getBackendUrl(), {
     report: session.report,
     preferences: session.preferences,
     question,
     listing,
-    history: session.history,
+    history: (session.itemTalk || []).slice(-6),
+    details: page?.details || undefined,
   });
+  const itemTalk = [...(session.itemTalk || []), { role: "user", text: question.slice(0, 1000) }, { role: "assistant", text: answer.slice(0, 1000) }];
+  session = { ...session, itemTalk: itemTalk.slice(-6) };
   await finishAnswer(answer);
 }
 
@@ -1486,7 +2153,7 @@ async function extractTab(tabId, timeoutMs = 4000) {
 
 // hint: end with one short "say ... next" suggestion for the current step
 async function finishAnswer(text, { hint = false } = {}) {
-  const spoken = clipForSpeech(hint ? `${text} ${nextHint(session)}` : text);
+  const spoken = clipForSpeech(hint ? `${text.trim()} ${nextHint(session)}` : text);
   session = pushHistory({ ...session, lastAnswer: spoken, lastSpoken: spoken, notice: null }, "assistant", spoken);
   persist();
   broadcast({ type: "session", session });
@@ -1518,6 +2185,8 @@ async function fail(message) {
     lastAnswer: message,
     lastSpoken: message,
   });
+  // a low tone first, so a failure never sounds like an ordinary answer
+  void sendOffscreen({ type: "offscreen-tone", name: "error" }).catch(() => {});
   // don't call /api/voice/speak to read an error that says voice isn't configured
   if (voiceUnconfigured(message)) return;
   await speak(message);
@@ -1599,6 +2268,7 @@ function queueSpeech(text, { evenIfPaused = false } = {}) {
     started = resolve;
   });
   const gen = speechGen;
+  let spoke = false;
   const job = speechTail.then(async () => {
     if ((session.paused || session.off) && !evenIfPaused) {
       // work that finishes during a break stays on screen and waits for "resume"
@@ -1626,6 +2296,7 @@ function queueSpeech(text, { evenIfPaused = false } = {}) {
         setSession({ voice: { status: "speaking", transcript: session.voice.transcript } });
         const done = waitForSpeechDone();
         await sendOffscreen({ type: "offscreen-speak", audioBase64: arrayBufferToBase64(bytes) });
+        spoke = true;
         started(true);
         await done;
         if (gen !== speechGen) return;
@@ -1638,11 +2309,18 @@ function queueSpeech(text, { evenIfPaused = false } = {}) {
       setSession({ voice: { status: "idle", transcript: session.voice.transcript }, notice: `${reason} The answer is shown in the side panel.` });
       const why = backupVoiceExplained ? "" : "My main voice isn't working right now, so I'm using a backup voice. ";
       backupVoiceExplained = true;
+      spoke = true;
       started(true);
       await backupSpeak(`${why}${chunks.slice(i).join(" ")}`);
     }
   });
-  const finished = job.catch(() => {}).finally(() => started(false));
+  const finished = job
+    .catch(() => {})
+    .finally(() => started(false))
+    .then(() => {
+      // the last thing tellr had to say, fully played and not cut off: it's the shopper's turn
+      if (spoke && gen === speechGen && speechTail === finished) yourTurn(text);
+    });
   speechTail = finished;
   return { started: startedPromise, done: finished };
 }
@@ -1664,6 +2342,17 @@ function backupSpeak(text) {
     }
     setTimeout(resolve, 90_000);
   });
+}
+
+// tellr finished talking and has nothing more to say or do: one bright chime means "your turn".
+// after a question ("what size?"), the mic then opens by itself, so the shopper just answers;
+// it closes on its own when they stop talking.
+function yourTurn(spokenText) {
+  if (session.busy || session.off || session.paused || talkHold || session.voice.status === "listening") return;
+  void sendOffscreen({ type: "offscreen-tone", name: "turn" }).catch(() => {});
+  if (!/\?["')\s]*$/.test(String(spokenText || "").trim())) return;
+  holdMode = "toggle";
+  void enqueue(() => (talkHold ? undefined : startTalk()));
 }
 
 // resolves true once the words start playing, false if they were skipped or stopped

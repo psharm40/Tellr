@@ -147,6 +147,51 @@ textarea {
   display: none;
 }
 
+/* the saved-items table: large and simple, readable row by row */
+table.saved {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+}
+table.saved th,
+table.saved td {
+  text-align: left;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+/* tellr's state in one big word, each with its own color; large for low-vision shoppers */
+.presence {
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 22px;
+  font-weight: 700;
+  border-radius: 14px;
+  border: 3px solid currentColor;
+}
+.presence[data-state="listening"] {
+  color: var(--listen);
+}
+.presence[data-state="thinking"] {
+  color: var(--warn);
+}
+.presence[data-state="speaking"],
+.presence[data-state="ready"] {
+  color: var(--good);
+}
+.presence[data-state="paused"],
+.presence[data-state="off"] {
+  color: var(--mute);
+}
+
 .tone-good {
   color: var(--good);
 }

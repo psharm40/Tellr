@@ -1,4 +1,4 @@
-import { CHECK_STATUS, EVIDENCE_STATUS, FACT_TOPICS, OVERALL, budgetText, describeRequirement, formatUsd, ruleLabel } from "./lib/format.js";
+import { CHECK_STATUS, EVIDENCE_STATUS, FACT_TOPICS, OVERALL, PAGE_KEYS, PRESENCE, reminderName, budgetText, describeRequirement, formatUsd, presenceOf, ruleLabel } from "./lib/format.js";
 import { formatHoldKey, getSettings } from "./lib/settings.js";
 import { playCaption } from "./lib/caption.js";
 
@@ -50,6 +50,12 @@ $("inspect").addEventListener("click", () => send("inspect-now"));
 $("review").addEventListener("click", () => send("review-now"));
 confirmBtn.addEventListener("click", () => send("confirm-now"));
 cancelBtn.addEventListener("click", () => send("cancel-confirm"));
+$("saved").addEventListener("click", (event) => {
+  const open = event.target.closest("button[data-open-saved]");
+  const remove = event.target.closest("button[data-remove-saved]");
+  if (open) send("open-saved", { number: Number(open.dataset.openSaved) });
+  if (remove) send("remove-saved", { number: Number(remove.dataset.removeSaved) });
+});
 resultsEl.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-number]");
   if (button) send("open-result", { number: Number(button.dataset.number) });
@@ -89,6 +95,17 @@ Promise.all([getSettings(), chrome.commands.getAll().catch(() => [])]).then(([se
   const shortcut = (name) => commands.find((c) => c.name === name)?.shortcut;
   const toggle = shortcut("toggle-listening");
   const open = shortcut("open-tellr");
+  // every key, as chrome has them set now; the page keys are option+shift and a letter
+  const optionShift = mac ? "Option+Shift+" : "Alt+Shift+";
+  const rows = [
+    [formatHoldKey(settings.holdKey, mac), "hold and talk"],
+    [shortcut("toggle-listening"), "start or stop listening"],
+    [shortcut("stop-speaking"), "stop talking"],
+    [shortcut("open-tellr"), "open this panel"],
+    [shortcut("close-tellr"), "close Tellr and clear the page (press twice)"],
+    ...PAGE_KEYS.map(([letter, what]) => [`${optionShift}${letter}`, `${what} (on a shopping page)`]),
+  ].filter(([keys]) => keys);
+  $("shortcut-list").innerHTML = rows.map(([keys, what]) => `<li><strong>${escapeHtml(keys)}</strong>: ${escapeHtml(what)}</li>`).join("");
   $("shortcut").textContent = [
     `On a shopping page, hold ${formatHoldKey(settings.holdKey, mac)} and talk.`,
     toggle ? `Or press ${toggle} anywhere in Chrome to start, and again to stop.` : "",
@@ -107,6 +124,26 @@ function render(session) {
   const text = session.notice || session.lastAnswer || voice.transcript || "";
   answerEl.textContent = text;
   live.textContent = speakAnswers ? "" : text;
+
+  // the shortlist as a table, so a screen reader can move by row and hear each column's name
+  const saved = session.shortlist || [];
+  const FIT = { great_pick: "Great pick", good_pick: "Good pick", okay_pick: "Okay pick", risky: "Risky", not_a_match: "Not a match" };
+  $("saved").innerHTML = saved.length
+    ? `<table class="saved"><caption class="muted">${saved.length} saved</caption>
+        <thead><tr><th scope="col">Item</th><th scope="col">Price</th><th scope="col">Fit</th><th scope="col">What to know</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+        <tbody>${saved
+          .map((entry, i) => {
+            const name = reminderName(entry).replace(/^the /, "");
+            const note = entry.flaw || (entry.unknown ? `Unknown: ${entry.unknown}` : "");
+            return `<tr><th scope="row">${i + 1}. ${escapeHtml(name)}</th><td>${escapeHtml(formatUsd(entry.priceCents))}</td><td>${escapeHtml(FIT[entry.fit] || "Not judged yet")}</td><td>${escapeHtml(note || "Nothing noted")}</td>
+              <td><button type="button" data-open-saved="${i + 1}" aria-label="Open saved ${i + 1}">Open</button> <button type="button" data-remove-saved="${i + 1}" aria-label="Remove saved ${i + 1}">Remove</button></td></tr>`;
+          })
+          .join("")}</tbody></table>`
+    : `<p class="muted">Nothing saved yet.</p>`;
+
+  const state = presenceOf(session);
+  $("presence").dataset.state = state;
+  $("presence").textContent = PRESENCE[state];
 
   paused = Boolean(session.paused);
   pauseBtn.textContent = paused ? "Resume Tellr" : "Pause Tellr";

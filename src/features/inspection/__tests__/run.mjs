@@ -341,6 +341,21 @@ await t("INS-R4 invalid image -> 400", async () => {
   const { status } = await insStatus({ listing: { ...listing, images: [{ id: "p", url: "https://x/a.png", alt: "a" }] }, preferences: prefs });
   check("INS-R4 invalid image -> 400", status === 400, `status=${status}`);
 });
+// a real listing gallery has more than 3 photos: the request schema and the image check must
+// agree on the same limit (imageValidation.MAX_IMAGES), or the route rejects it as invalid
+await t("INS-R6 listing with 5 photos -> 200 and reaches the model", async () => {
+  let called = 0; setFake(() => { called++; return modelText(goodReport); });
+  // ids match the ones the sample report cites ("photo-1")
+  const photos = Array.from({ length: 5 }, (_, i) => ({ id: "photo-" + (i + 1), url: TINY_PNG, alt: "photo " + (i + 1) }));
+  const { status } = await insStatus({ listing: { ...listing, images: photos }, preferences: prefs });
+  check("INS-R6 listing with 5 photos -> 200 and reaches the model", status === 200 && called === 1, `status=${status} called=${called}`);
+});
+await t("INS-R7 more than MAX_IMAGES photos -> 400, no api call", async () => {
+  let called = 0; setFake(() => { called++; return modelText(goodReport); });
+  const photos = Array.from({ length: imageVal.MAX_IMAGES + 1 }, (_, i) => ({ id: "img_" + (i + 1), url: TINY_PNG, alt: "p" }));
+  const { status } = await insStatus({ listing: { ...listing, images: photos }, preferences: prefs });
+  check("INS-R7 more than MAX_IMAGES photos -> 400, no api call", status === 400 && called === 0, `status=${status} called=${called}`);
+});
 await t("INS-R5 model_unavailable -> 503", async () => {
   setFake(() => { throw new Error("down"); });
   const { status } = await insStatus({ listing, preferences: prefs });

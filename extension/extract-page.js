@@ -158,6 +158,147 @@
     return urls.slice(0, 12);
   }
 
+  // --- photos of the listing itself. layout-based, so it works on any store: find the product
+  // section (the title and its photo), take the main photo there, then the photo gallery around
+  // it. swatches and the size picker sit with the title and price; reviews, ads, and similar
+  // items sit outside the section or link to other products. none of those are this item.
+  const MIN_MAIN_PHOTO = 150;
+  const GALLERY_TEXT_LIMIT = 300;
+
+  function titleElement() {
+    const node = document.querySelector("#productTitle, #title, [itemprop='name'], h1");
+    return node && !node.closest("#tellr-root") ? node : null;
+  }
+
+  // a link that leads to some other product (a recommendation, an ad, the seller's other items),
+  // as opposed to a gallery link that opens a bigger photo or does nothing
+  function linksElsewhere(anchor) {
+    const href = anchor.href || "";
+    if (!/^https?:/i.test(href) || /\.(jpe?g|png|webp|gif|avif)(\?|$)/i.test(href)) return false;
+    try {
+      const there = new URL(href);
+      if (there.origin === location.origin && there.pathname === location.pathname) return false;
+      const thisItem = location.href.match(ITEM_PATH)?.[1];
+      const thatItem = href.match(ITEM_PATH)?.[1];
+      if (thisItem && thatItem) return thisItem !== thatItem;
+      // only links that wrap a picture look like product cards; plain text links are navigation
+      return Boolean(anchor.querySelector("img"));
+    } catch {
+      return false;
+    }
+  }
+
+  function insideOtherProduct(el) {
+    const anchor = el.closest("a[href]");
+    return Boolean(anchor && linksElsewhere(anchor));
+  }
+
+  function shownSize(img) {
+    const box = img.getBoundingClientRect();
+    return {
+      width: box.width || img.naturalWidth || Number(img.getAttribute("width")) || 0,
+      height: box.height || img.naturalHeight || Number(img.getAttribute("height")) || 0,
+    };
+  }
+
+  // the main photo: the biggest picture in the same section as the product title, never one
+  // that links to another product. with no title to anchor on, nothing is assumed.
+  function mainProductPhoto() {
+    const title = titleElement();
+    if (!title) return null;
+    let section = title.parentElement;
+    for (let depth = 0; section && depth < 10; depth += 1, section = section.parentElement) {
+      const pictures = [...section.querySelectorAll("img")]
+        .filter((img) => !img.closest("#tellr-root") && !insideOtherProduct(img) && imgUrl(img))
+        .map((img) => ({ img, ...shownSize(img) }))
+        .filter(({ width, height }) => width >= MIN_MAIN_PHOTO && height >= MIN_MAIN_PHOTO);
+      if (pictures.length) {
+        pictures.sort((a, b) => b.width * b.height - a.width * a.height);
+        return pictures[0].img;
+      }
+      if (section === document.body) break;
+    }
+    return null;
+  }
+
+  // the widest container around the main photo that is still only photos: it stops before the
+  // title, prices, text fields and pickers, a block of text, or a link to another product
+  function galleryAround(photo) {
+    const title = titleElement();
+    let gallery = photo.parentElement;
+    for (let next = gallery?.parentElement; next && next !== document.body; next = next.parentElement) {
+      if (title && next.contains(title)) break;
+      if (next.querySelector("select, textarea, input:not([type='hidden']):not([type='submit']):not([type='button']):not([type='radio'])")) break;
+      if (PRICE.test(text(next))) break;
+      if (text(next).length > GALLERY_TEXT_LIMIT) break;
+      if ([...next.querySelectorAll("a[href]")].some(linksElsewhere)) break;
+      gallery = next;
+    }
+    return gallery;
+  }
+
+  // one key per photo, whatever size the site serves it at: ebay's s-l64 / s-l1600, amazon's
+  // ._AC_SX679_. suffix, and common "_800x" / "?width=" sizing on other stores
+  function listingPhotoKey(href) {
+    const clean = href.split("?")[0].split("#")[0].toLowerCase();
+    const ebay = clean.match(/ebayimg\.com\/(?:images\/g|thumbs\/images\/g)\/([^/]+)\//)?.[1];
+    if (ebay) return ebay;
+    return clean.replace(/\._[^/]*?_\.(jpe?g|png|webp)$/, ".$1").replace(/[_-]\d{2,4}x\d{0,4}(?=\.\w+$)/, "");
+  }
+
+  function words(value) {
+    return new Set(String(value || "").toLowerCase().match(/[a-z0-9]{3,}/g) || []);
+  }
+
+  function sameProductName(a, b) {
+    const x = words(a);
+    const y = words(b);
+    if (!x.size || !y.size) return false;
+    const shared = [...x].filter((w) => y.has(w)).length;
+    return shared / Math.min(x.size, y.size) >= 0.6;
+  }
+
+  // the store's own photo list (json-ld) is only used when it is provably this listing: same
+  // product name, and it includes the photo on screen now, so a different color's set is ignored
+  function structuredPhotos(title, shownKey) {
+    for (const node of jsonLdNodes()) {
+      const urls = firstImage(node.image);
+      if (!urls.length || !sameProductName(node.name, title)) continue;
+      if (shownKey && urls.some((url) => listingPhotoKey(url) === shownKey)) return urls;
+    }
+    return [];
+  }
+
+  function listingPhotos() {
+    const photos = [];
+    const seen = new Set();
+    function add(url, alt) {
+      const href = absoluteUrl(url);
+      if (!href || !/^https?:\/\//i.test(href) || SKIP_IMG.test(href) || SKIP_IMG.test(alt || "")) return;
+      const key = listingPhotoKey(href);
+      if (seen.has(key)) return;
+      seen.add(key);
+      photos.push({ url: href, alt: alt || "" });
+    }
+    const title = heading();
+    const named = titleElement();
+    const main = mainProductPhoto();
+    if (main) {
+      add(imgUrl(main), main.alt);
+      for (const img of galleryAround(main).querySelectorAll("img")) {
+        if (!insideOtherProduct(img)) add(imgUrl(img), img.alt);
+      }
+    } else {
+      // no product section found: the share-preview photo, only if it names this product.
+      // otherwise no photos, which tellr reports, rather than a guess
+      // a real product name on the page is required: comparing og:title with itself proves nothing
+      if (named && sameProductName(meta("og:title"), text(named))) add(meta("og:image"), meta("og:title"));
+    }
+    const shownKey = photos[0] ? listingPhotoKey(photos[0].url) : null;
+    for (const url of structuredPhotos(title, shownKey)) add(url, title);
+    return photos.slice(0, 12);
+  }
+
   // listing pages on marketplaces: /itm/<id> on ebay, /dp/<asin> on amazon
   const ITEM_PATH = /\/(?:itm|dp|gp\/product)\/(?:[^/]*\/)?([A-Za-z0-9]{6,})/;
 
@@ -549,11 +690,15 @@
         // "(estimated)" is still a label; anything else is a sentence, not a row
         if (!/^\(?(estimated|est\.?)\)?:?$/i.test(rest)) continue;
       }
+      // the price that follows the label in its row ("Shipping: US $9.45 (approx C $12.95) USPS…"),
+      // never one from before it or far after it, so a long row still reads right
       let row = walker.currentNode.parentElement;
       for (let depth = 0; depth < 3 && row; depth += 1, row = row.parentElement) {
         const rowText = text(row);
-        if (rowText.length > 120) break;
-        const cents = centsFromText(rowText.replace(value, ""));
+        if (rowText.length > 600) break;
+        const at = rowText.indexOf(value);
+        const after = at >= 0 ? rowText.slice(at + value.length, at + value.length + 80) : "";
+        const cents = centsFromText(after);
         if (cents != null) return cents;
       }
     }
@@ -639,7 +784,7 @@
     const add = (label, value) => {
       label = label.replace(/\s*:\s*$/, "").trim();
       value = value.replace(/\s+/g, " ").replace(/\bSee (all )?details\b.*$/i, "").replace(/\bRead more\b.*$/i, "").trim();
-      if (!label || !value || label.length > 40 || value.length > 160) return;
+      if (!label || !value || label.length > 40 || value.length > 300) return;
       if (pairs.some((p) => p.label.toLowerCase() === label.toLowerCase())) return;
       pairs.push({ label, value });
     };
@@ -661,7 +806,50 @@
       const [label, ...rest] = text(li).split(/\s*:\s*/);
       if (rest.length) add(label.replace(/[‎‏]/g, ""), rest.join(": ").replace(/[‎‏]/g, ""));
     }
+    // any store: a short "Shipping: free over $50" line, or a section under a heading such as
+    // "Shipping & returns". only for the known topics, so random "Note: …" text stays out
+    // one pass over the page's text: a label is a short "Shipping:" text, its value is the rest of
+    // that text or of the small element around it
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const piece = walker.currentNode.nodeValue.replace(/\s+/g, " ").trim();
+      const parts = piece.match(/^([A-Za-z][A-Za-z &/'-]{2,30}):\s*(.*)$/);
+      if (!parts || !FACT_GROUP.some(([, pattern]) => pattern.test(parts[1]))) continue;
+      const holder = walker.currentNode.parentElement;
+      if (holder?.closest("#tellr-root")) continue;
+      let value = parts[2];
+      for (let el = holder, depth = 0; value.length < 2 && el && depth < 2; el = el.parentElement, depth += 1) {
+        const around = text(el);
+        if (around.length > 300) break;
+        value = around.slice(around.indexOf(piece) + piece.length).trim();
+      }
+      if (value.length >= 2) add(parts[1], value);
+    }
+    for (const heading of document.querySelectorAll("h2, h3, h4, h5, summary, button[aria-controls], [role='tab']")) {
+      const title = text(heading);
+      if (!title || title.length > 60 || !FACT_GROUP.some(([, pattern]) => pattern.test(title))) continue;
+      const body = sectionBody(heading);
+      if (body) add(title, body);
+    }
     return pairs.slice(0, 40);
+  }
+
+  // the text a section heading opens: a <details> body, the panel a tab or button controls, or
+  // what follows the heading up to the next heading
+  function sectionBody(heading) {
+    let body = "";
+    if (heading.matches("summary")) {
+      body = text(heading.parentElement).slice(text(heading).length);
+    } else if (heading.getAttribute("aria-controls")) {
+      body = text(document.getElementById(heading.getAttribute("aria-controls")));
+    } else {
+      for (let next = heading.nextElementSibling; next && !/^H[1-5]$/.test(next.tagName) && body.length < 400; next = next.nextElementSibling) {
+        body += ` ${text(next)}`;
+      }
+    }
+    body = body.replace(/\s+/g, " ").trim();
+    // a section that holds its own "Label: value" rows is already read row by row
+    return body.length >= 3 && !/^[A-Za-z][A-Za-z &/'-]{2,30}:/.test(body) ? body.slice(0, 300) : "";
   }
 
   // the smallest block around "positive feedback": the seller card
@@ -721,8 +909,51 @@
     return facts;
   }
 
+  // written reviews, found by their section heading ("Seller feedback", "Customer reviews"),
+  // read word for word. a heading that names the seller or says "feedback" is about the seller.
+  function reviewFacts() {
+    const found = [];
+    const seen = new Set();
+    for (const heading of document.querySelectorAll("h2, h3, h4, h5, [role='heading']")) {
+      const title = text(heading);
+      if (!title || title.length > 60 || !/\b(feedback|reviews?)\b/i.test(title)) continue;
+      const label = /\b(seller|store|shop)\b|feedback/i.test(title) ? "Seller feedback" : "Customer review";
+      // the section ends at the next heading ("Care", "Shipping"), so later text isn't a review
+      const nextHeading = [...document.querySelectorAll("h1, h2, h3, h4, h5, [role='heading']")].find(
+        (other) => other !== heading && heading.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING && !heading.contains(other),
+      );
+      const inSection = (el) =>
+        heading.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING &&
+        (!nextHeading || el.compareDocumentPosition(nextHeading) & Node.DOCUMENT_POSITION_FOLLOWING);
+      // the smallest block around the heading that holds review entries
+      let section = heading.parentElement;
+      let entries = [];
+      for (let depth = 0; section && depth < 4 && !entries.length; depth += 1, section = section.parentElement) {
+        const blocks = [...section.querySelectorAll("li, article, blockquote, p, [itemprop='review'], [data-hook='review'], [class*='comment' i]")].filter(
+          (el) => !el.contains(heading) && !el.closest("#tellr-root") && inSection(el),
+        );
+        // the innermost blocks only, so a whole list isn't read as one review
+        entries = blocks.filter((el) => !blocks.some((other) => other !== el && el.contains(other)));
+        entries = entries.map((el) => text(el)).filter((said) => said.length >= 15 && said.length <= 600);
+      }
+      for (const said of entries) {
+        if (seen.has(said) || found.length >= 8) continue;
+        seen.add(said);
+        found.push({ label, value: said.slice(0, 300) });
+      }
+    }
+    return found;
+  }
+
+  // the item specifics and stated condition, as one block of text for claude. labeled as the
+  // seller's own words: claude weighs them against what the photos show
+  function listingDetails(facts) {
+    const rows = [...facts.condition, ...facts.specifics].map((row) => `${row.label}: ${row.value}`);
+    return rows.length ? `Item details as written by the seller:\n${rows.join("\n")}`.slice(0, 1500) : "";
+  }
+
   function pageFacts() {
-    const groups = { seller: sellerFacts(), popularity: popularityFacts(), condition: [], returns: [], shipping: [], payment: [], specifics: [] };
+    const groups = { seller: sellerFacts(), popularity: popularityFacts(), condition: [], returns: [], shipping: [], payment: [], specifics: [], reviews: reviewFacts() };
     for (const pair of labelValuePairs()) {
       if (/^(seller|sold by)$/i.test(pair.label)) continue;
       const group = FACT_GROUP.find(([, pattern]) => pattern.test(pair.label))?.[0] || "specifics";
@@ -744,9 +975,12 @@
     const cartTitle = text(document.querySelector("[data-item-title], .cart-item-title, .sc-product-title")) || title;
     // which kind of page this is. prices can't tell: a results page also "has a price"
     // (its first result's). marketplace url shapes are reliable; elsewhere, count products.
+    // several prices for one product (its price, "free shipping over $50") are still one item:
+    // only different product names make a results page
+    const distinctItems = new Set(products.map((p) => p.title.toLowerCase())).size;
     const pageKind = ITEM_PATH.test(location.href)
       ? "listing"
-      : /\/sch\/|\/s\?|[?&](?:k|_nkw|q|query|search)=/i.test(location.href) || products.length > 1
+      : /\/sch\/|\/s\?|[?&](?:k|_nkw|q|query|search)=/i.test(location.href) || distinctItems > 1
         ? "results"
         : "listing";
     // where the shopper is, for "where am i" and the welcome: home, results, listing, cart, checkout
@@ -764,18 +998,23 @@
     const singleListing = pageKind === "listing";
     const imageUrls = (
       singleListing
-        ? pageImages()
+        ? listingPhotos()
         : [...products.filter((p) => p.imageUrl).map((p) => ({ url: p.imageUrl, alt: p.title })), ...pageImages()]
     ).slice(0, 12);
+    const facts = singleListing ? pageFacts() : null;
     return {
       url: location.href,
       pageKind,
       place,
       searchQuery,
-      facts: singleListing ? pageFacts() : null,
+      facts,
+      // item specifics and stated condition as text, for questions about the item
+      details: facts ? listingDetails(facts) : "",
+      // the seller's own description, word for word, for "read me the description"
+      sellerDescription: singleListing ? written : "",
       title,
       // on a listing, other products' titles ("similar items") would read as details of this item
-      description: [written, !singleListing && catalog && `Items visible on this page:\n${catalog}`, `Page text: ${visibleText()}`]
+      description: [written, facts && listingDetails(facts), !singleListing && catalog && `Items visible on this page:\n${catalog}`, `Page text: ${visibleText()}`]
         .filter(Boolean)
         .join("\n\n")
         .slice(0, 4000),

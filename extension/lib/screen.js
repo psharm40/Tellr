@@ -28,9 +28,18 @@ export function priceBounds(text, maxTotalCents = null) {
 
 const MATERIALS = ["leather", "suede", "canvas", "wool", "cotton", "denim", "silk", "linen", "cashmere", "nylon", "polyester", "patent", "mesh", "velvet"];
 
+// "flat shoes, no heels" -> "flat shoes, ": what the shopper rules out is never searched for.
+// a negation reaches to the next comma, full stop, "but", or "and" ("not black but brown").
+// prices are read separately, so "no more than 30 dollars" still sets the budget.
+const NEGATED = /\b(?:no|not|without|except|minus|avoid|never|nothing|anything but|rather not|instead of|(?:do ?n[o']t|don'?t|doesn'?t|won'?t) (?:want|need|like|care for))\b[^,.;!?]*?(?=$|[,.;!?]|\b(?:but|and)\b)/gi;
+
+export function withoutNegated(text) {
+  return String(text || "").replace(NEGATED, " ");
+}
+
 // the shopper's own words worth looking for in titles: colors, size, material
 export function keywordsFrom(text, preferences) {
-  const said = String(text || "").toLowerCase();
+  const said = withoutNegated(text).toLowerCase();
   const words = [];
   for (const req of preferences?.requirements ?? []) {
     if (req.attribute === "color" && typeof req.value === "string") {
@@ -40,7 +49,8 @@ export function keywordsFrom(text, preferences) {
     }
   }
   // the last size mentioned wins, so "size 7... actually 8" uses 8
-  const sizes = [...said.matchAll(/\bsize\s*(\d{1,2}(?:\.5)?|xx?s|xx?l|s|m|l)\b/g)];
+  // "size 8", "size is 8", "size: 8", "size of 8"
+  const sizes = [...said.matchAll(/\bsize\s*(?:is\s+|of\s+|:\s*)?(\d{1,2}(?:\.5)?|xx?s|xx?l|s|m|l)\b/g)];
   const size = sizes.at(-1)?.[1];
   if (size) {
     words.push({

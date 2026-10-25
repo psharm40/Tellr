@@ -33,15 +33,20 @@ function tone(freqs, peak = 0.18) {
     // no audio device; the visual bubble still shows the state
   }
 }
+// each sound means one thing, with its own shape, so the state can be told apart by ear:
 const MIC_ON = [660, 990]; // rising: recording now
 const MIC_OFF = [990, 660]; // falling: stopped, working on it
 const MIC_ERROR = [330, 247]; // low: something went wrong
 const POWER_ON = [440, 660, 880]; // three rising: tellr turned on
 const POWER_OFF = [880, 660, 440]; // three falling: tellr turned off
-const NAMED_TONES = { on: POWER_ON, off: POWER_OFF, error: MIC_ERROR };
+const YOUR_TURN = [1175]; // one bright note: finished talking, ready for you
+const PAUSED = [392, 330]; // two soft low notes: paused, still remembering
+const NAMED_TONES = { on: POWER_ON, off: POWER_OFF, error: MIC_ERROR, turn: YOUR_TURN, paused: PAUSED };
+// the thinking pulse: two quick low notes, like a heartbeat, at about half the volume of the
+// other tones, every 2 seconds. the first waits a moment, so quick answers make no pulse at all.
+const THINKING = [294, 247];
+const THINKING_VOLUME = 0.09;
 
-// a soft tick every 1.5 seconds while tellr is working on an answer, so a quiet moment never
-// sounds like it broke. the first tick waits a moment, so quick answers make no tick at all.
 let workingTimer = null;
 function setWorking(on) {
   clearTimeout(workingTimer);
@@ -49,9 +54,9 @@ function setWorking(on) {
   workingTimer = null;
   if (!on) return;
   workingTimer = setTimeout(() => {
-    tone([520], 0.05);
-    workingTimer = setInterval(() => tone([520], 0.05), 1500);
-  }, 1200);
+    tone(THINKING, THINKING_VOLUME);
+    workingTimer = setInterval(() => tone(THINKING, THINKING_VOLUME), 2000);
+  }, 900);
 }
 
 function emit(gen, event) {

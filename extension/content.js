@@ -1,6 +1,6 @@
 // bubble only while this tab is holding the shortcut, or for a few seconds after that hold.
 (function () {
-  const VERSION = 16;
+  const VERSION = 18;
   if (window.__tellrContentVersion === VERSION) return;
   window.__tellrAbort?.abort();
   window.__tellrAbort = new AbortController();
@@ -346,11 +346,32 @@
     { capture: true, signal },
   );
 
+  // option+shift + a letter on a shopping page does one tellr thing, without talking. never while
+  // typing in a field, and never with control or command, so voiceover (control+option) and the
+  // browser's own shortcuts keep working
+  const PAGE_KEYS = { KeyR: "repeat", KeyH: "help", KeyW: "where", KeyK: "recap", KeyB: "back", KeyN: "more", KeyC: "check", KeyP: "pause" };
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (!event.altKey || !event.shiftKey || event.ctrlKey || event.metaKey || event.repeat) return;
+      const action = PAGE_KEYS[event.code];
+      if (!action || typingTarget(event.target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (extensionGone()) {
+        warnStale();
+        return;
+      }
+      chrome.runtime.sendMessage({ type: "page-key", action }).catch(() => {});
+    },
+    { capture: true, signal },
+  );
+
   function releaseHold() {
     if (!holding) return;
     holding = false;
     stopPing();
-    show("processing", "Working", textEl.textContent && textEl.textContent !== "Speak now" && textEl.textContent !== "Hearing you" ? textEl.textContent : "One moment");
+    show("processing", "Thinking", textEl.textContent && textEl.textContent !== "Speak now" && textEl.textContent !== "Hearing you" ? textEl.textContent : "One moment");
     try {
       port?.postMessage({ type: "stop" });
     } catch {
@@ -412,7 +433,7 @@
     if (caption && caption.text === text && performance.now() - caption.started < 500) return;
     endCaption();
     caption = { text, durationMs, started: performance.now(), frame: 0 };
-    show("speaking", "Tellr", captionAt(text, 0, durationMs));
+    show("speaking", "Speaking", captionAt(text, 0, durationMs));
     const tick = () => {
       if (!caption) return;
       const elapsed = performance.now() - caption.started;
@@ -437,7 +458,7 @@
     const notice = session?.notice || "";
     const answer = session?.lastAnswer || "";
     if (holding && status === "idle" && (notice || answer)) {
-      show("answer", "Tellr", notice || answer);
+      show("answer", "Your turn", notice || answer);
       hideSoon(8000);
       return;
     }
@@ -447,15 +468,15 @@
       return;
     }
     if (!holding && status === "processing") {
-      show("processing", "Working", transcript || "One moment");
+      show("processing", "Thinking", transcript || "One moment");
       return;
     }
     if (!holding && status === "speaking") {
-      show("speaking", "Tellr", answer || "Speaking");
+      show("speaking", "Speaking", answer || "Speaking");
       return;
     }
     if (!holding && (notice || answer)) {
-      show("answer", "Tellr", notice || answer);
+      show("answer", "Your turn", notice || answer);
       hideSoon(6000);
     }
   }

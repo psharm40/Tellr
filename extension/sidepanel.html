@@ -11,11 +11,20 @@
         <p class="kicker">Tellr</p>
         <h1 id="tellr-title">Check this page before you buy</h1>
         <p class="muted">Talk or type. I check the photos and fees on the page you're shopping. I never place a real order.</p>
+        <!-- what tellr is doing now, matching its sounds. hidden from screen readers so it never
+             talks over tellr; they hear the tones instead -->
+        <p id="presence" class="presence" data-state="ready" aria-hidden="true">Your turn</p>
         <p id="live" class="live muted" role="status" aria-live="polite"></p>
         <!-- hidden from screen readers: they'd read it over tellr's own voice. the full answer is below -->
         <p id="caption" class="caption" aria-hidden="true" hidden></p>
         <p id="answer" class="muted"></p>
       </header>
+
+      <section class="card" aria-labelledby="saved-title">
+        <h2 id="saved-title">Your saved items</h2>
+        <p class="muted">Say "save this one" on an item, or "save number 2" while hearing results. Say "compare my saved ones" to check them side by side.</p>
+        <div id="saved"></div>
+      </section>
 
       <section class="card" aria-labelledby="talk-title">
         <h2 id="talk-title">Talk to Tellr</h2>
@@ -29,6 +38,8 @@
           <button type="button" id="repeat">Say that again</button>
         </div>
         <p id="shortcut" class="muted"></p>
+        <h3>Keyboard shortcuts</h3>
+        <ul id="shortcut-list"></ul>
       </section>
 
       <form id="ask-form" class="card">

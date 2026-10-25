@@ -67,6 +67,10 @@ const SYSTEM_CONFLICTS = [
   { when: (h) => h.ctrl && h.code === "Space", why: "Control+Space switches keyboard languages on Mac. Pick another key." },
   { when: (h) => h.meta && h.code === "F5", why: "Command+F5 turns VoiceOver on and off. Pick another key." },
   { when: (h) => h.alt && h.shift && (h.code === "KeyL" || h.code === "KeyT"), why: "Tellr already uses that for its toggle and side panel shortcuts." },
+  {
+    when: (h) => h.alt && h.shift && ["KeyS", "KeyX", "KeyR", "KeyH", "KeyW", "KeyK", "KeyB", "KeyN", "KeyC", "KeyP"].includes(h.code),
+    why: "Tellr already uses Option+Shift and that letter for one of its keyboard shortcuts. Pick another key.",
+  },
 ];
 
 export function holdKeyProblem(hold) {

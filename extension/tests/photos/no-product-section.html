@@ -1,0 +1,8 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Spring lookbook</title>
+<meta property="og:title" content="Spring lookbook: ten outfits"><meta property="og:image" content="https://blog.example/cover.jpg">
+<script>history.replaceState(null, "", "/blog/spring-lookbook");</script></head><body>
+<main><p>Our favorite outfits this spring.</p>
+<img src="https://blog.example/outfit1.jpg" width="800" height="600"><img src="https://blog.example/outfit2.jpg" width="800" height="600"></main>
+<pre id="out"></pre><script src="/extract-page.js"></script>
+<script>document.getElementById("out").textContent = "RESULT " + JSON.stringify(TellrExtract.extractPage().imageUrls.map((i) => i.url));</script>
+</body></html>

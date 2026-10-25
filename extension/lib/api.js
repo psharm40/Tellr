@@ -16,13 +16,13 @@ function describeHttpError(backendUrl, path, status, data) {
   return `Tellr's server returned an error (${status}).`;
 }
 
-async function post(backendUrl, path, body, timeoutMs = 60_000) {
+async function post(backendUrl, path, body, timeoutMs = 60_000, method = "POST") {
   let response;
   try {
     response = await fetch(`${backendUrl}${path}`, {
-      method: "POST",
+      method,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
@@ -37,6 +37,20 @@ async function post(backendUrl, path, body, timeoutMs = 60_000) {
   return data;
 }
 
+// the saved list in convex, through /api/saved (proposed endpoint; see src/features/saved)
+export function savedList(backendUrl, ownerId) {
+  return post(backendUrl, `/api/saved?owner=${encodeURIComponent(ownerId)}`, undefined, 10_000, "GET");
+}
+
+export function savedPut(backendUrl, ownerId, item) {
+  return post(backendUrl, "/api/saved", { ownerId, item }, 10_000);
+}
+
+// key: one item; no key: the whole list
+export function savedDelete(backendUrl, ownerId, key = null) {
+  return post(backendUrl, "/api/saved", { ownerId, ...(key ? { key } : {}) }, 10_000, "DELETE");
+}
+
 export function parseRequirements(backendUrl, text) {
   return post(backendUrl, "/api/requirements", { text });
 }
@@ -46,8 +60,8 @@ export async function inspectListing(backendUrl, listing, preferences) {
   return data.report;
 }
 
-export async function explainListing(backendUrl, { report, preferences, question, listing, history }) {
-  const data = await post(backendUrl, "/api/inspection/explain", { report, preferences, question, listing, history });
+export async function explainListing(backendUrl, { report, preferences, question, listing, history, details }) {
+  const data = await post(backendUrl, "/api/inspection/explain", { report, preferences, question, listing, history, ...(details ? { details } : {}) });
   return data.answer;
 }
 

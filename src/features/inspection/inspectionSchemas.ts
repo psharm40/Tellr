@@ -4,6 +4,7 @@
 
 import { z } from "zod";
 import type { InspectionReport, Listing } from "@/types/tellr";
+import { MAX_IMAGES } from "./imageValidation";
 import { shoppingPreferencesSchema } from "./schemas";
 
 // --- request shapes -------------------------------------------------------
@@ -16,7 +17,8 @@ const listingImageSchema = z.object({
   alt: z.string(),
 });
 
-// a listing to inspect. prices are integer cents; 1–3 images per the mvp spec.
+// a listing to inspect. prices are integer cents; 1 to MAX_IMAGES images, the same limit
+// imageValidation enforces, so the two checks can't disagree.
 export const listingSchema = z.object({
   id: z.string().trim().min(1),
   title: z.string().trim().min(1),
@@ -24,7 +26,7 @@ export const listingSchema = z.object({
   category: z.string().trim().min(1),
   itemPriceCents: z.number().int().min(0),
   currency: z.literal("USD"),
-  images: z.array(listingImageSchema).min(1).max(3),
+  images: z.array(listingImageSchema).min(1).max(MAX_IMAGES),
 });
 
 // POST /api/inspection request body.

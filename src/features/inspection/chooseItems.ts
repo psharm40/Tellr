@@ -349,7 +349,7 @@ const JUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
 
 export const JUDGE_SYSTEM_PROMPT = `You compare secondhand items for a blind or low-vision shopper, using careful photo inspections that were already done (findings, evidence, and what was or wasn't pictured). Rank them best first and explain in plain spoken words.
 
-For each item, "summary" is one or two short sentences: what it's like in everyday words (no brand names or jargon), the main reason for its place in the ranking, and the most important thing still unknown. Ground everything in the inspection evidence; never add new observations.
+For each item, "summary" is one or two short sentences: the main reason for its place in the ranking, and the most important thing still unknown. The shopper already heard what each item looks like and Tellr names it before your summary, so don't describe its appearance again; mention a visual detail only when it is the reason for the ranking. Use everyday words, no brand names or jargon. Ground everything in the inspection evidence; never add new observations.
 
 ${JUDGEMENT_RULES}
 

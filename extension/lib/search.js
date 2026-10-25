@@ -1,6 +1,6 @@
 // turns the shopper's requirements into a marketplace search, like typing into the site's
 // search bar and pressing enter. plain logic, unit-tested.
-import { keywordsFrom, priceBounds } from "./screen.js";
+import { keywordsFrom, priceBounds, withoutNegated } from "./screen.js";
 
 export const SITE_NAME = { ebay: "eBay", amazon: "Amazon" };
 
@@ -26,9 +26,10 @@ const GENERIC = /\b(shoes|footwear|clothing|clothes|tops|top|bags|accessories|it
 // how to search, from what was said: buy it now unless they want auctions (bidding is hard to
 // follow by voice), new or used only when they say so, cheapest first when they ask
 export function searchFilters(said) {
-  const text = String(said || "");
+  // "no auctions" means buy it now; "not used" is not a request for used
+  const text = withoutNegated(said);
   return {
-    buyItNow: !/\b(auctions?|bid|bidding)\b/i.test(text),
+    buyItNow: !/\b(auctions?|bid|bidding)\b/i.test(text) && !/\b(?:turn off|remove|drop|disable|clear|no|without) (?:the )?buy it now\b/i.test(String(said || "")),
     condition: /\b(brand new|new with tags|nwt|new in box|unworn|new condition|only new|just new)\b/i.test(text)
       ? "new"
       : /\b(used|pre-?owned|secondhand|second-hand|second hand|thrift(?:ed)?|vintage)\b/i.test(text)
@@ -46,7 +47,7 @@ export function buildSearch(preferences, said) {
   const color = colors.length === 1 ? colors[0] : "";
   const material = words.find((w) => MATERIAL_SET.has(w)) || "";
   const size = words.find((w) => /^size /.test(w)) || "";
-  const specific = [...String(said || "").matchAll(SPECIFIC)].at(-1)?.[1]?.toLowerCase();
+  const specific = [...withoutNegated(said).matchAll(SPECIFIC)].at(-1)?.[1]?.toLowerCase();
   if (specific && !category.toLowerCase().includes(specific)) {
     category = GENERIC.test(category) ? category.replace(GENERIC, specific) : category;
   }
