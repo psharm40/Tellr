@@ -1,0 +1,236 @@
+:root {
+  --ink: #141414;
+  --paper: #f6f4ef;
+  --line: #d8d4cb;
+  --mute: #5c5850;
+  --listen: #c45c26;
+  --good: #0d6b4c;
+  --bad: #b42318;
+  --warn: #8a5a00;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--paper);
+  color: var(--ink);
+  font: 18px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+body {
+  padding: 20px;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+}
+
+h1 {
+  font-size: 28px;
+}
+
+h2 {
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+p,
+label,
+li {
+  margin: 0;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  min-height: 44px;
+  padding: 8px 14px;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--ink);
+  border-radius: 12px;
+}
+
+button:hover {
+  background: #efece4;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid var(--listen);
+  outline-offset: 2px;
+}
+
+button.primary {
+  color: #fff;
+  background: var(--ink);
+}
+
+button:disabled {
+  color: var(--mute);
+  background: #ece9e1;
+  border-color: var(--line);
+}
+
+input,
+textarea {
+  width: 100%;
+  padding: 10px 12px;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.stack {
+  display: grid;
+  gap: 14px;
+}
+
+.card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+
+.muted {
+  color: var(--mute);
+  font-size: 15px;
+}
+
+.live {
+  min-height: 1.4em;
+}
+
+/* live caption of tellr's voice: large and high contrast for low-vision shoppers */
+.caption {
+  margin: 0;
+  padding: 12px 14px;
+  font-size: 20px;
+  line-height: 1.4;
+  color: var(--paper);
+  background: var(--ink);
+  border-radius: 14px;
+}
+
+.caption[hidden] {
+  display: none;
+}
+
+/* the saved-items table: large and simple, readable row by row */
+table.saved {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+}
+table.saved th,
+table.saved td {
+  text-align: left;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+/* tellr's state in one big word, each with its own color; large for low-vision shoppers */
+.presence {
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 22px;
+  font-weight: 700;
+  border-radius: 14px;
+  border: 3px solid currentColor;
+}
+.presence[data-state="listening"] {
+  color: var(--listen);
+}
+.presence[data-state="thinking"] {
+  color: var(--warn);
+}
+.presence[data-state="speaking"],
+.presence[data-state="ready"] {
+  color: var(--good);
+}
+.presence[data-state="paused"],
+.presence[data-state="off"] {
+  color: var(--mute);
+}
+
+.tone-good {
+  color: var(--good);
+}
+.tone-bad {
+  color: var(--bad);
+}
+.tone-warn {
+  color: var(--warn);
+}
+
+.kicker {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+ul {
+  margin: 0;
+  padding-left: 1.1em;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #f6f4ef;
+    --paper: #111111;
+    --line: #2d2d2d;
+    --mute: #b7b3aa;
+  }
+
+  button,
+  input,
+  textarea,
+  .card {
+    background: #1a1a1a;
+  }
+
+  button.primary {
+    color: #111;
+    background: #f6f4ef;
+  }
+}

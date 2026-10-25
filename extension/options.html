@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tellr settings</title>
+    <link rel="stylesheet" href="ui.css" />
+    <style>
+      main {
+        max-width: 560px;
+        margin: 0 auto;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="stack">
+      <header class="stack">
+        <p class="kicker">Tellr</p>
+        <h1>Settings</h1>
+        <p class="muted">Keys stay on the Tellr server. This page only stores the server address, your hold shortcut, and whether answers are spoken.</p>
+        <p id="live" class="live muted" role="status" aria-live="polite"></p>
+      </header>
+
+      <form id="form" class="stack">
+        <div class="card">
+          <label for="backend">Tellr server</label>
+          <input id="backend" name="backend" type="url" spellcheck="false" autocomplete="off" placeholder="http://localhost:3000" />
+          <p class="muted">This must be the Tellr repo (`npm run dev` in Projects/tellr), not another app on port 3000. If that command printed Local: http://localhost:3001, use that. After a Vercel deploy, paste the https origin here.</p>
+          <button type="button" id="find-server">Find local Tellr</button>
+        </div>
+
+        <div class="card">
+          <p>Hold-to-talk shortcut</p>
+          <button type="button" id="capture">Press a shortcut</button>
+          <p id="shortcut" class="muted"></p>
+        </div>
+
+        <div class="card">
+          <label class="row" style="align-items: center">
+            <input id="speak" type="checkbox" style="width: auto" />
+            Speak answers out loud
+          </label>
+        </div>
+
+        <div class="card">
+          <p>Microphone</p>
+          <p class="muted">Chrome only asks once, from this page. The mic is on only while you hold the shortcut.</p>
+          <button type="button" id="mic">Allow microphone</button>
+          <p id="mic-status" class="muted"></p>
+        </div>
+
+        <div class="row">
+          <button class="primary" type="submit">Save</button>
+        </div>
+      </form>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

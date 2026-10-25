@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Tellr",
+  "version": "0.1.0",
+  "description": "Hold a key and ask about the product or checkout you are looking at. Tellr checks the photos and the fees and answers out loud.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxDlBrH+VkPCdBno0XWirSvHa/8otP5T7PCCyGl1mw259tymNuB76RCJZ3IFDropmtwv0sPQi4bkJGTAV2QIDcf1zuDbVBnCUW956QqHbA9ZjbQitsa5fM4Vxv6tNIndYz9jdP/ewkeWGY+InCwt/rSCeCMBcMOT6qQgYcQURDbDqrtlqb1y/RBtlWL6xRFxuR1NRAeIGSwROHI4FHX+V7xemKW5Z/AG42UonVpO1KKCWZyBGyDrAaR5AxmvI+cf2GNSwNpp/RGooLaKd5F4yqOQQ6efSpw8qSstoLCsk5Yge0ymZG+Hw694ZdXbLaxLdV4FqLbaY8Qa75uV01kvqyQIDAQAB",
+  "permissions": ["storage", "sidePanel", "offscreen", "tabs", "scripting", "activeTab", "tts"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "content_scripts": [
+    { "matches": ["http://*/*", "https://*/*"], "js": ["extract-page.js", "content.js"], "css": ["content.css"], "run_at": "document_idle" }
+  ],
+  "side_panel": { "default_path": "sidepanel.html" },
+  "commands": {
+    "toggle-listening": {
+      "suggested_key": { "default": "Alt+Shift+L", "mac": "Alt+Shift+L" },
+      "description": "Start or stop listening (press once to talk, again to stop)"
+    },
+    "open-tellr": {
+      "suggested_key": { "default": "Alt+Shift+T", "mac": "Alt+Shift+T" },
+      "description": "Open the Tellr side panel"
+    },
+    "stop-speaking": {
+      "suggested_key": { "default": "Alt+Shift+S", "mac": "Alt+Shift+S" },
+      "description": "Stop Tellr talking"
+    },
+    "close-tellr": {
+      "suggested_key": { "default": "Alt+Shift+X", "mac": "Alt+Shift+X" },
+      "description": "Close Tellr (press twice): clears the page and this shopping session"
+    }
+  },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "action": {
+    "default_title": "Open Tellr",
+    "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" }
+  },
+  "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" }
+}

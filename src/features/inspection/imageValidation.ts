@@ -20,7 +20,9 @@ export type ImageValidationResult =
   | { ok: false; message: string };
 
 export const MIN_IMAGES = 1;
-export const MAX_IMAGES = 3;
+// a typical secondhand listing has 5 to 12 photos; 8 covers most of them while keeping a
+// request well under vercel's 4.5 mb body limit (the extension sends ~1280px jpegs)
+export const MAX_IMAGES = 8;
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB per image (decoded)
 export const MAX_TOTAL_BYTES = 15 * 1024 * 1024; // 15 MB total (decoded)
 

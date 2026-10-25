@@ -1,0 +1,7 @@
+<!doctype html><html><head><meta charset="utf-8"><script>history.replaceState(null, "", "/products/ceramic-mug");</script></head><body>
+<main><h1>Speckled Ceramic Mug</h1><p>$24.00</p>
+<h3>Reviews</h3><ul><li>Heavy and well made, keeps coffee warm.</li><li>The glaze chipped after a month.</li></ul>
+<h3>Care</h3><p>Dishwasher safe, hand washing keeps the glaze nicer.</p></main>
+<pre id="out"></pre><script src="/extract-page.js"></script>
+<script>const p = TellrExtract.extractPage(); document.getElementById("out").textContent = "RESULT " + JSON.stringify({ reviews: p.facts && p.facts.reviews, specifics: p.facts && p.facts.specifics, details: p.details, description: p.description });</script>
+</body></html>

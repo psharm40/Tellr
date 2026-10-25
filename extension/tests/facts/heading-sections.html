@@ -1,0 +1,7 @@
+<!doctype html><html><head><meta charset="utf-8"><script>history.replaceState(null, "", "/shop/ceramic-mug");</script></head><body>
+<main><h1>Speckled Ceramic Mug</h1><p>$24.00</p>
+<h3>Shipping</h3><p>Ships in 2 days by UPS.</p><p>Flat rate $6.00 anywhere in the US.</p>
+<h3>Reviews</h3><p>Love this mug, it cost me $24 and ships fast.</p></main>
+<pre id="out"></pre><script src="/extract-page.js"></script>
+<script>const p = TellrExtract.extractPage(); document.getElementById("out").textContent = "RESULT " + JSON.stringify({ shippingCents: p.checkoutHints.shippingCents, facts: p.facts });</script>
+</body></html>

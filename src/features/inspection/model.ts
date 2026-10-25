@@ -16,6 +16,12 @@ export function getModel(): string {
   return model;
 }
 
+// photo inspection can use a stronger vision model than the fast requirement and q&a
+// calls. optional ANTHROPIC_INSPECTION_MODEL; falls back to ANTHROPIC_MODEL.
+export function getInspectionModel(): string {
+  return process.env.ANTHROPIC_INSPECTION_MODEL?.trim() || getModel();
+}
+
 // per-model call constraints. claude haiku 4.5 rejects the `effort` parameter
 // and we do not need extended thinking for structured extraction, so inspection
 // requests omit both. callers should not pass `effort` or `thinking`.

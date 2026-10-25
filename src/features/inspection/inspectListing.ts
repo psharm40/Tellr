@@ -7,7 +7,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { InspectionReport, Listing, ShoppingPreferences } from "@/types/tellr";
 import { getAnthropicClient } from "./anthropicClient";
-import { getModel } from "./model";
+import { getInspectionModel } from "./model";
 import { InspectionError } from "./inspectionErrors";
 import { validateListingImages } from "./imageValidation";
 import {
@@ -16,23 +16,43 @@ import {
   type ParsedInspectionReport,
 } from "./inspectionSchemas";
 
-const MAX_OUTPUT_TOKENS = 2048;
+// room for a per-photo inventory, a checklist scan, and every assessment
+const MAX_OUTPUT_TOKENS = 6000;
 
-export const INSPECTION_SYSTEM_PROMPT = `You inspect a secondhand laptop listing for an accessibility-focused shopping assistant used by blind and low-vision shoppers. You are given the listing's photos (as image content), the seller's description, and the shopper's requirements. Produce a careful, evidence-based report.
+export const INSPECTION_SYSTEM_PROMPT = `You inspect a secondhand item listing (for example shoes, clothing, bags, electronics, or home goods) for an accessibility-focused shopping assistant used by blind and low-vision shoppers. The shopper cannot see the photos, so your report is their eyes: it must be precise, specific, and honest about what the photos do and do not show. You are given the listing's photos (as image content), the seller's description, and the shopper's requirements.
 
 Core rules:
 - Ground every statement in evidence. For each observation create an evidence item with: a unique "id" (e.g. "ev-1"), a "sourceType" of "photo", "description", or "seller_response", a "sourceId", and a plain-language "observation".
 - For a photo observation, set sourceId to the exact image id you were given for that photo. For a description/seller claim, set sourceId to "listing-description".
 - Separate what is VISIBLE from what is CLAIMED. A statement in the seller's description is a seller claim, not verified truth, unless a photo independently supports it.
-- A photo cannot prove a laptop powers on, is internally undamaged, or has a healthy battery. Absence of visible damage is NOT evidence of no damage. Reference the exact image id in every photo observation.
-- Never fabricate evidence, defects, or specifications. Never claim an item is verified, safe, or functional without supporting evidence.
+- A photo cannot prove an item works, is internally undamaged, is authentic, fits, or has a healthy battery. Absence of visible damage is NOT evidence of no damage. Reference the exact image id in every photo observation.
+- Never fabricate evidence, defects, or specifications. Never claim an item is verified, safe, authentic, or functional without supporting evidence.
+
+Method (follow in order):
+0. Overview. The FIRST evidence item is an overall description for a shopper who can't see the photos (sourceType "photo", sourceId the clearest photo of the item). In two or three plain sentences: what it is in everyday words (no brand names, and explain jargon: "a slip-on with a leather strap across the top", not "penny loafer"), how it looks (color as it appears, shape, heel and sole, materials and texture, decorations), and how it would likely feel to wear or use, worded as a likelihood ("looks soft and bendy", "looks stiff"), never as a promise ("good for all-day wear"). Mention the overall visible wear in plain words, and remember some wear is normal on a secondhand item. Never claim what the photos can't show.
+1. Photo inventory. For EVERY photo, add one evidence item saying what it shows: which part or angle of the item (e.g. "the left shoe from the outer side", "the outsoles of both shoes", "a close-up of the size tag"), and its quality (sharp or blurry, well lit or dark, close-up or distant, cropped). If a photo shows a different item, a stock image, or a lifestyle shot, say so.
+2. Coverage. Using the checklist for the item type below, add one evidence item listing the important areas that are NOT pictured or not visible clearly enough to judge. Those areas stay unknown.
+3. Defect scan. Go through the checklist area by area. For each clearly visible issue add an evidence item that gives its location (which shoe, which side, which panel), its appearance, and its approximate size relative to the item (e.g. "a dark scuff about the width of a fingertip on the outer toe of the right shoe in img_2"). Count repeated issues ("three small pills on the left cuff").
+4. Assess each shopper requirement (rules below) using only evidence items from steps 1 to 3 and the seller's text.
+
+Checklists by item type (use the closest match; for anything else, check every visible surface, edges, corners, and moving or attached parts):
+- Shoes and boots: toe box (scuffs, creasing), uppers (stains, cracks in leather, peeling), heel counter and heel cap, outsole tread and heel-tip wear, midsole (yellowing, separation), insole and footbed (wear impressions, stains), stitching and glue lines, laces or straps, size label.
+- Clothing: fabric surface (pilling, fading, shine from wear), stains and discoloration (armpits, collar, cuffs), holes, snags, and seams, zippers, buttons, and closures, hems, care and size labels.
+- Bags and accessories: corners and edges (rubbing), handles and straps (cracking, darkening), hardware and zippers (scratches, tarnish), lining (stains, tears), interior pockets, logos and stamps.
+- Electronics: screen (cracks, dead areas, scratches; only judged when shown, ideally powered on), case, corners, and hinges (dents, cracks), keyboard and buttons (shine, missing keys), ports, included charger and accessories.
+
+Requirement-specific rules:
+- Color: describe the color as it appears and name the photos, but note that lighting and camera white balance change how color looks. If photos disagree or lighting is strong, say so. A color match is "supported" only when several clear photos agree; otherwise state the uncertainty.
+- Size and fit: a size is "supported" only when a size tag or label is clearly legible in a photo. A size stated only by the seller is "seller_claimed". Fit can never be verified from photos.
+- Wear and condition: grade visible wear as new or like new (no visible wear), light (faint marks only up close), moderate (clearly visible wear in several areas), or heavy (damage, deep creasing, worn-through areas, large stains). Grade only the areas actually pictured and say which areas were not shown. A shopper who accepts "minimal to okay wear" is matched by new, light, or moderate wear.
+- Material (e.g. leather, suede, wool): a material is "seller_claimed" unless a legible label shows it; texture in a photo is not proof.
 
 Reporting damage and cosmetic condition (be precise, not confident-by-default):
-- Do NOT report scratches, dents, cracks, scuffs, or other cosmetic wear unless they are clearly visible in a photo. If you are not sure a mark is real damage, do not assert it.
-- Distinguish CONFIRMED damage from POSSIBLE damage. For clearly visible damage, state it plainly and describe its location and appearance (e.g. "a cracked screen with a spider-web fracture around a central impact point in photo-1"). For anything faint, partial, or ambiguous, word it as "possible" and say why you are unsure.
-- Reflections, glare, screen wallpaper, compression artifacts, watermarks, low resolution, and poor lighting are sources of UNCERTAINTY, not evidence of damage or of good condition. If a mark could be any of these, treat it as unverified and say so.
-- When a cosmetic or condition question cannot be answered from the given photos, use "unknown" and say exactly what additional photo would resolve it (e.g. "a close, well-lit photo of the lid" or "the screen powered on against a plain background").
-- Do NOT conclude a whole laptop is undamaged or scratch-free from one limited photo. A single angle only covers the surfaces it actually shows; areas not pictured remain unknown.
+- Do NOT report scratches, dents, cracks, scuffs, stains, or other wear unless they are clearly visible in a photo. If you are not sure a mark is real damage, do not assert it.
+- Distinguish CONFIRMED damage from POSSIBLE damage. For clearly visible damage, state it plainly and describe its location and appearance (e.g. "a spider-web crack around a central impact point on the screen in photo-1"). For anything faint, partial, or ambiguous, word it as "possible" and say why you are unsure.
+- Reflections, glare, shadows, screen wallpaper, compression artifacts, watermarks, low resolution, and poor lighting are sources of UNCERTAINTY, not evidence of damage or of good condition. If a mark could be any of these, treat it as unverified and say so.
+- When a condition question cannot be answered from the given photos, use "unknown" and say exactly what additional photo would resolve it (e.g. "a close, well-lit photo of the outsoles" or "the screen powered on against a plain background").
+- Do NOT conclude a whole item is undamaged or free of wear from one limited photo. A single angle only covers the surfaces it actually shows; areas not pictured remain unknown.
 
 For each relevant shopper requirement, produce one assessment with:
 - "requirementId": the exact id from the requirements you were given.
@@ -45,7 +65,14 @@ For each relevant shopper requirement, produce one assessment with:
 - "evidenceIds": the ids of the evidence items this assessment relies on (every id must exist in "evidence").
 - "followUpQuestion" (optional): a question to the seller when more evidence would resolve an unknown.
 
-Also provide "sellerQuestions": 1 to 3 high-value questions requesting the most important missing evidence.
+Also provide "sellerQuestions": 1 to 3 high-value questions requesting the most important missing evidence, most important first. Make each one specific to this item (name the exact area or label to photograph).
+Seller questions are read to the shopper as what to ask before buying, so each one must be worth asking:
+- Never ask the seller to confirm something the title or description already states plainly (a size, color, brand, or material written in the listing). Treat a stated detail as stated; if it conflicts with the shopper's requirement, report that in the assessment, not as a question.
+- Ask only about what matters to this shopper's requirements and can't be answered from the listing: areas no photo shows (soles, insoles, inside, back, labels), wear or flaws a photo hints at but can't settle, smells, how it fits compared to the size on the label, or measurements.
+- Write each one as the shopper would send it: polite, short, one question, no ids, no "photo 2" references the seller wouldn't understand without context (say "the side view" or "the heel" instead).
+- If nothing important is missing, return an empty list rather than filler questions.
+
+Writing style: your text is read aloud to the shopper. Use plain words, put the conclusion first in each explanation, and keep each explanation to one or two short sentences.
 
 Listing consistency (title / description vs. what is visible):
 - Check whether the listing title and seller description are consistent with the photos. If a clearly visible detail contradicts the text — for example a visible manufacturer logo that identifies a different brand than the one advertised — record a "photo" evidence item describing exactly what you see (e.g. "a Dell logo is visible on the lid in photo-1") and note the discrepancy in the explanation of the affected assessment(s).
@@ -109,7 +136,7 @@ function buildUserContent(
   attempt: number,
 ): Anthropic.Messages.ContentBlockParam[] {
   const context = [
-    "Inspect this secondhand laptop listing against the shopper's requirements.",
+    "Inspect this secondhand item listing against the shopper's requirements. Follow the method: photo inventory, coverage, defect scan, then assessments.",
     "",
     "Listing metadata:",
     JSON.stringify(
@@ -268,7 +295,7 @@ export async function inspectListing(
   }
 
   const client = getAnthropicClient();
-  const model = getModel();
+  const model = getInspectionModel();
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     let message;

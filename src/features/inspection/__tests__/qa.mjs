@@ -179,6 +179,25 @@ await t("QA-R3 missing question -> 400 (no api call)", async () => {
   const { status } = await routeS({ report, preferences });
   check("QA-R3 missing question -> 400 (no api call)", status === 400 && called === 0, `called=${called}`);
 });
+// the listing's item specifics (optional "details"): sent to the model with the photo findings,
+// so "what is it made of?" uses both. requests without details behave as before.
+await t("QA-R7 details reach the model with the inspection findings", async () => {
+  let seenSystem = "";
+  setFake((params) => { seenSystem = params.system || ""; return answerText("The listing says leather."); });
+  const { status } = await routeS({ ...base("What material are they?"), details: "Item details as written by the seller:\nUpper Material: Leather" });
+  check("QA-R7 details reach the model with the inspection findings", status === 200 && seenSystem.includes("Upper Material: Leather") && seenSystem.includes("listingDetails"), `status=${status}`);
+});
+await t("QA-R8 no details -> same request as before", async () => {
+  let seenSystem = "";
+  setFake((params) => { seenSystem = params.system || ""; return answerText("ok"); });
+  const { status } = await routeS(base("What material are they?"));
+  check("QA-R8 no details -> same request as before", status === 200 && !seenSystem.includes("listingDetails"), `status=${status}`);
+});
+await t("QA-R9 oversized details -> 400 (no api call)", async () => {
+  let called = 0; setFake(() => { called++; return answerText("x"); });
+  const { status } = await routeS({ ...base("What material?"), details: "x".repeat(1501) });
+  check("QA-R9 oversized details -> 400 (no api call)", status === 400 && called === 0, `status=${status} called=${called}`);
+});
 await t("QA-R4 invalid report shape -> 400", async () => {
   setFake(() => answerText("x"));
   const { status } = await routeS({ report: { listingId: "x" }, preferences, question: "hi" });

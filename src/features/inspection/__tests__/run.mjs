@@ -204,9 +204,10 @@ await t("IMG-2 http url rejected (ssrf-safe)", async () => {
   const r = imageVal.validateListingImages([{ id: "p", url: "https://example.com/a.png", alt: "a" }]);
   check("IMG-2 http url rejected (ssrf-safe)", r.ok === false);
 });
-await t("IMG-3 more than 3 images rejected", async () => {
-  const r = imageVal.validateListingImages(Array.from({ length: 4 }, (_, i) => ({ id: "p" + i, url: TINY_PNG, alt: "a" })));
-  check("IMG-3 more than 3 images rejected", r.ok === false);
+await t("IMG-3 more than MAX_IMAGES (8) images rejected", async () => {
+  const many = (n) => Array.from({ length: n }, (_, i) => ({ id: "p" + i, url: TINY_PNG, alt: "a" }));
+  check("IMG-3 more than MAX_IMAGES (8) images rejected", imageVal.validateListingImages(many(imageVal.MAX_IMAGES + 1)).ok === false);
+  check("IMG-3b a full listing gallery (8 photos) accepted", imageVal.validateListingImages(many(imageVal.MAX_IMAGES)).ok === true);
 });
 await t("IMG-4 empty list rejected", async () => {
   check("IMG-4 empty list rejected", imageVal.validateListingImages([]).ok === false);
@@ -339,6 +340,21 @@ await t("INS-R4 invalid image -> 400", async () => {
   setFake(() => modelText(goodReport));
   const { status } = await insStatus({ listing: { ...listing, images: [{ id: "p", url: "https://x/a.png", alt: "a" }] }, preferences: prefs });
   check("INS-R4 invalid image -> 400", status === 400, `status=${status}`);
+});
+// a real listing gallery has more than 3 photos: the request schema and the image check must
+// agree on the same limit (imageValidation.MAX_IMAGES), or the route rejects it as invalid
+await t("INS-R6 listing with 5 photos -> 200 and reaches the model", async () => {
+  let called = 0; setFake(() => { called++; return modelText(goodReport); });
+  // ids match the ones the sample report cites ("photo-1")
+  const photos = Array.from({ length: 5 }, (_, i) => ({ id: "photo-" + (i + 1), url: TINY_PNG, alt: "photo " + (i + 1) }));
+  const { status } = await insStatus({ listing: { ...listing, images: photos }, preferences: prefs });
+  check("INS-R6 listing with 5 photos -> 200 and reaches the model", status === 200 && called === 1, `status=${status} called=${called}`);
+});
+await t("INS-R7 more than MAX_IMAGES photos -> 400, no api call", async () => {
+  let called = 0; setFake(() => { called++; return modelText(goodReport); });
+  const photos = Array.from({ length: imageVal.MAX_IMAGES + 1 }, (_, i) => ({ id: "img_" + (i + 1), url: TINY_PNG, alt: "p" }));
+  const { status } = await insStatus({ listing: { ...listing, images: photos }, preferences: prefs });
+  check("INS-R7 more than MAX_IMAGES photos -> 400, no api call", status === 400 && called === 0, `status=${status} called=${called}`);
 });
 await t("INS-R5 model_unavailable -> 503", async () => {
   setFake(() => { throw new Error("down"); });

@@ -1,0 +1,8 @@
+<!doctype html><html><head><meta charset="utf-8"><script>history.replaceState(null, "", "/products/linen-button-shirt");</script></head><body>
+<main><h1>Linen Button Shirt</h1><p class="price">$58.00</p>
+<ul><li><strong>Delivery:</strong> 3 to 5 business days</li><li>Note: hand wash cold</li><li><b>Condition:</b> Gently used, no stains</li></ul>
+<details><summary>Shipping &amp; Returns</summary><p>Free standard shipping on orders over $50. Returns accepted within 30 days.</p></details>
+<details><summary>Size guide</summary><p>Runs a little large.</p></details></main>
+<pre id="out"></pre><script src="/extract-page.js"></script>
+<script>const p = TellrExtract.extractPage(); document.getElementById("out").textContent = "RESULT " + JSON.stringify({ shippingCents: p.checkoutHints.shippingCents, facts: p.facts });</script>
+</body></html>
